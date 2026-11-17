@@ -1,0 +1,5 @@
+{
+  "name": "claude-for-pm",
+  "owner": { "name": "GrzeskoByte" },
+  "plugins": [{ "name": "pm-mode", "source": "./" }]
+}

@@ -1,0 +1,6 @@
+{
+  "name": "pm-mode",
+  "version": "0.1.0",
+  "description": "Claude mode for PM: Opus orchestrates sprints; board, Gantt and per-agent/model timeline for Claude subagents and local CLIs (Gemini, Codex, OpenCode, Grok).",
+  "types": "./types/index.d.ts"
+}
