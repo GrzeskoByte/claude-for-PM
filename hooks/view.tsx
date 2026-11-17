@@ -26,6 +26,7 @@ export type ViewData = {
   showAgents: boolean
   signin: SigninState | null
   keyFor: Engine | null
+  testing: Engine[]
   sprintEdit: SprintEdit | null
   showReport: boolean
   orchestrator: string
@@ -61,6 +62,8 @@ export type ViewActions = {
   showKeyInput: (engine: Engine | null) => void
   submitKey: (engine: Engine, value: string) => void
   closeSignin: () => void
+  testAgent: (engine: Engine) => void
+  testAll: () => void
 }
 
 // Status drives color everywhere; a glyph goes with it so color is never the only cue.
@@ -656,8 +659,11 @@ function board(el: El, data: ViewData, plan: PmPlan, actions: ViewActions) {
   )
 }
 
+// What we know about each agent, from strongest proof to weakest.
 const AUTH = {
-  ok: { label: 'Signed in', color: 'success' },
+  ok: { label: 'Works', color: 'success' },
+  unverified: { label: 'Not tested', color: 'suggestion' },
+  failing: { label: "Can't run", color: 'error' },
   missing: { label: 'Sign-in needed', color: 'warning' },
   unknown: { label: 'Unknown', color: 'inactive' },
 }
@@ -674,16 +680,27 @@ function agentsPanel(el: El, data: ViewData, actions: ViewActions) {
       {data.agents.map(raw => {
         // Entries detected by an older load of this mod lack the sign-in fields.
         const a = { ...raw, auth: raw.auth ?? 'unknown', signin: raw.signin ?? { browser: false } }
-        const state = a.isInstalled ? AUTH[a.auth] : { label: 'Not installed', color: 'inactive' }
+        const isTesting = data.testing.includes(a.engine)
+        const state = !a.isInstalled ? { label: 'Not installed', color: 'inactive' } : isTesting ? { label: 'Testing…', color: 'claude' } : (AUTH[a.auth] ?? AUTH.unknown)
         const isPending = s?.engine === a.engine
         const action =
           a.engine === 'claude' ? null : !a.isInstalled ? (
             INSTALL[a.engine] ? <Link key={`install-${a.engine}`} href={INSTALL[a.engine]!} label="Install" /> : null
           ) : (
             <Box flexDirection="row" gap={1}>
+              {a.auth !== 'missing' && !isTesting && (
+                <Button
+                  key={`test-${a.engine}`}
+                  variant={a.auth === 'unverified' ? 'primary' : undefined}
+                  plain={a.auth === 'unverified' ? undefined : true}
+                  onPress={() => actions.testAgent(a.engine)}
+                >
+                  {a.auth === 'ok' || a.auth === 'failing' ? 'Test again' : 'Test'}
+                </Button>
+              )}
               {a.signin.browser && !isPending && (
                 <Button key={`signin-${a.engine}`} variant={a.auth === 'missing' ? 'primary' : undefined} plain={a.auth === 'missing' ? undefined : true} onPress={() => actions.signIn(a.engine)}>
-                  {a.auth === 'ok' ? 'Sign in again' : 'Sign in'}
+                  {a.auth === 'missing' ? 'Sign in' : 'Sign in again'}
                 </Button>
               )}
               {(a.signin.apiKey || a.signin.provider) && Input && (
@@ -710,6 +727,11 @@ function agentsPanel(el: El, data: ViewData, actions: ViewActions) {
               <Box flexGrow={1} />
               {action}
             </Box>
+            {a.auth === 'failing' && a.failReason && (
+              <Text color="error" wrap="wrap">
+                {a.failReason}
+              </Text>
+            )}
             {data.keyFor === a.engine && Input && (
               <Input
                 key={`keyinput-${a.engine}`}
@@ -776,7 +798,7 @@ export function PmView(props: { el: El; data: ViewData; actions: ViewActions }) 
   const { plan } = data
   const narrow = data.columns < 75
   const installed = data.agents.filter(a => a.isInstalled).length
-  const needsSignin = data.agents.some(a => a.isInstalled && a.auth === 'missing')
+  const needsSignin = data.agents.some(a => a.isInstalled && (a.auth === 'missing' || a.auth === 'failing'))
   const hasFailed = plan?.tasks.some(t => t.status === 'failed' || t.status === 'cancelled')
   // A finished run with anything not done needs a look, not a green "Done".
   const phaseInfo = plan && (plan.phase === 'done' && plan.tasks.some(t => t.status !== 'done') ? { label: 'Needs attention', color: 'warning' } : PHASE[plan.phase])
@@ -884,6 +906,9 @@ export function PmView(props: { el: El; data: ViewData; actions: ViewActions }) 
           needsSignin ? 'warning' : 'ide',
           agentsPanel(el, data, actions),
           <Box flexDirection="row" gap={1}>
+            <Button key="test-all" plain onPress={actions.testAll}>
+              <Text color="suggestion">Test all</Text>
+            </Button>
             <Button key="refresh" plain onPress={actions.refreshAgents}>
               Refresh
             </Button>

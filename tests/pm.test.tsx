@@ -29,7 +29,7 @@ const PLAN = {
   ],
 }
 
-function world(on: Parameters<Parameters<typeof test>[1]>[1]) {
+function world(on: Parameters<Parameters<typeof test>[1]>[1], opts: { codexTest?: 'ok' | 'refused' } = {}) {
   mock.store(on)
   mock.clock(on)
   mock.env(on, { HOME: '/home/u' })
@@ -51,7 +51,12 @@ function world(on: Parameters<Parameters<typeof test>[1]>[1]) {
   on('process.run', (_, e) => {
     const cmd = e.argv.join(' ')
     if (cmd.includes('command -v codex')) return { value: { exitCode: 0, stdout: '/bin/codex\n', stderr: '' } }
-    if (cmd === 'codex login status') return { value: { exitCode: 1, stdout: 'Not logged in', stderr: '' } }
+    if (cmd.startsWith('codex exec') && cmd.includes('Reply with exactly the word OK')) {
+      return opts.codexTest === 'ok'
+        ? { value: { exitCode: 0, stdout: 'OK\n', stderr: '' } }
+        : { value: { exitCode: 1, stdout: '', stderr: 'Error: API error (status 402 Payment Required): usage balance exhausted\n' } }
+    }
+    if (cmd === 'codex login status') return { value: { exitCode: 0, stdout: 'Logged in using ChatGPT', stderr: '' } }
     if (cmd === 'codex debug models') {
       return { value: { exitCode: 0, stdout: JSON.stringify({ models: [{ slug: 'gpt-6.1-sol', visibility: 'list' }] }), stderr: '' } }
     }
@@ -105,7 +110,7 @@ test('Opus plan lands on the board, Gantt and agents view on every surface', asy
       await ui.select({ key: 'view', value: 'timeline:task' })
     }
     await ui.press({ key: 'agents-toggle' })
-    expect(await ui.find({ type: 'Text', text: /Sign-in needed/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /Not tested/ })).toBeDefined()
     await ui.press({ key: 'agents-toggle' })
     await ui.unmount()
   }
@@ -165,8 +170,9 @@ test('sign in to an external agent from the pane', async ($, on) => {
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
   await ui.press({ key: 'agents-toggle' })
   await ui.press({ key: 'signin-codex' })
-  expect(await ui.find({ type: 'Link' })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /Signed in/ })).toBeDefined()
+  // The browser sign-in ran and finished: no error line is left under Codex.
+  expect(await ui.find({ type: 'Text', text: /Sign-in failed/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /Not tested/ })).toBeDefined()
   await ui.unmount()
 })
 
@@ -202,5 +208,35 @@ test('reassign a sprint, approve, run in order, and report back to Opus', async 
   expect(submitted.length).toBe(1)
   expect(submitted[0]).toContain('1 of 5 tasks done')
   expect(await ui.find({ key: 'retry' })).toBeDefined()
+  await ui.unmount()
+})
+
+test('an agent that cannot run is shown with its reason and gets no tasks', async ($, on) => {
+  world(on, { codexTest: 'refused' })
+  await $.session.start({ cwd: '/work', surface: 'desktop', isInteractive: true })
+  await $.tool.call({ tool: 'mcp__pm-mode__pm_plan', ...PLAN })
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await ui.press({ key: 'agents-toggle' })
+  await ui.press({ key: 'test-codex' })
+  expect(await ui.find({ type: 'Text', text: /Can't run/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /402 Payment Required/ })).toBeDefined()
+  // A new plan that still names Codex falls back to Claude.
+  await $.tool.call({ tool: 'mcp__pm-mode__pm_plan', ...PLAN })
+  const plan = JSON.parse(String((await $.tool.call({ tool: 'mcp__pm-mode__pm_status' })).result)) as {
+    tasks: { id: string; assignee: { engine: string } }[]
+  }
+  expect(plan.tasks.find(t => t.id === 'T3')!.assignee.engine).toBe('claude')
+  await ui.unmount()
+})
+
+test('a test prompt that answers marks the agent as working', async ($, on) => {
+  world(on, { codexTest: 'ok' })
+  await $.session.start({ cwd: '/work', surface: 'desktop', isInteractive: true })
+  await $.tool.call({ tool: 'mcp__pm-mode__pm_plan', ...PLAN })
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await ui.press({ key: 'agents-toggle' })
+  expect(await ui.find({ type: 'Text', text: /Not tested/ })).toBeDefined()
+  await ui.press({ key: 'test-codex' })
+  expect(await ui.find({ type: 'Text', text: /Works/ })).toBeDefined()
   await ui.unmount()
 })

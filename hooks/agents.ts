@@ -1,6 +1,6 @@
 import type { EngineInterface } from 'claude-code'
 
-import type { Assignee, AuthState, Autonomy, DetectedAgent, Engine } from '../types'
+import type { AgentHealth, Assignee, AuthState, Autonomy, DetectedAgent, Engine } from '../types'
 import { CLAUDE_MODELS, ENGINE_LABEL } from './plan'
 
 const BUILTIN_AGENT_TYPES = ['general-purpose', 'Explore', 'Plan']
@@ -92,29 +92,60 @@ async function authOf($: EngineInterface, engine: Engine): Promise<{ auth: AuthS
     const r = await run($, ['codex', 'login', 'status'])
     const text = `${r?.stdout ?? ''}${r?.stderr ?? ''}`.trim()
     if (!r) return { auth: 'unknown' }
-    return r.exitCode === 0 && /logged in/i.test(text) ? { auth: 'ok', authNote: text.split('\n')[0] } : { auth: 'missing' }
+    return r.exitCode === 0 && /logged in/i.test(text) ? { auth: 'unverified', authNote: text.split('\n')[0] } : { auth: 'missing' }
   }
   if (engine === 'grok') {
     const r = await run($, ['grok', 'models'])
     if (!r) return { auth: 'unknown' }
-    return /not authenticated/i.test(`${r.stdout}${r.stderr}`) ? { auth: 'missing' } : { auth: 'ok' }
+    return /not authenticated/i.test(`${r.stdout}${r.stderr}`) ? { auth: 'missing' } : { auth: 'unverified' }
   }
   if (engine === 'opencode') {
     const r = await run($, ['opencode', 'auth', 'list'])
     const lines = (r?.stdout ?? '').split('\n').map(l => l.trim()).filter(l => /\b(stored|logged|oauth|api key)\b/i.test(l))
     const providers = lines.map(l => l.split(/\s{2,}/)[0]).filter(Boolean)
     return providers.length
-      ? { auth: 'ok', authNote: `Connected: ${providers.join(', ')}. Free OpenCode models need no sign-in.` }
-      : { auth: 'missing', authNote: 'No provider connected. Free OpenCode models still work.' }
+      ? { auth: 'unverified', authNote: `Connected: ${providers.join(', ')}.` }
+      : { auth: 'unverified', authNote: 'No provider connected; the free OpenCode models still work.' }
   }
   // Gemini: an API key in the environment or ~/.gemini/.env, or a cached Google sign-in.
   const home = await $.env.get('HOME')
-  if ((await $.env.get('GEMINI_API_KEY')) || (await $.env.get('GOOGLE_API_KEY'))) return { auth: 'ok', authNote: 'Using an API key from the environment.' }
+  if ((await $.env.get('GEMINI_API_KEY')) || (await $.env.get('GOOGLE_API_KEY'))) return { auth: 'unverified', authNote: 'Using an API key from the environment.' }
   try {
-    if (/GEMINI_API_KEY\s*=\s*\S/.test(await $.fs.read(`${home}/.gemini/.env`))) return { auth: 'ok', authNote: 'Using the API key in ~/.gemini/.env.' }
+    if (/GEMINI_API_KEY\s*=\s*\S/.test(await $.fs.read(`${home}/.gemini/.env`))) return { auth: 'unverified', authNote: 'Using the API key in ~/.gemini/.env.' }
   } catch {}
-  if (home && (await $.fs.exists(`${home}/.gemini/oauth_creds.json`))) return { auth: 'ok', authNote: 'Signed in with Google.' }
+  if (home && (await $.fs.exists(`${home}/.gemini/oauth_creds.json`))) return { auth: 'unverified', authNote: 'Signed in with Google.' }
   return { auth: 'missing', authNote: 'Add an API key here, or run `gemini` once in a terminal to sign in with Google.' }
+}
+
+// Words an agent CLI prints when it refuses to run for its account, not for the task.
+export const ACCOUNT_FAILURE =
+  /(not authenticated|authenticat\w*|unauthori[sz]ed|forbidden|\b40[123]\b|payment|billing|credits?\b|balance|quota|exhausted|(?:no longer|not) supported|ineligible|free tier|rate.?limit|invalid api key|api key|log ?in|sign ?in|permission denied)/i
+
+const stripAnsi = (s: string) => s.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '')
+
+/** The most telling line of a failed run: an account error if there is one, else the last line. */
+export function failureReason(output: string): string {
+  const lines = stripAnsi(output)
+    .split('\n')
+    .map(l => l.trim())
+    // stack frames say where it broke, not why
+    .filter(l => l && !/^at\s/.test(l))
+  const line = lines.find(l => ACCOUNT_FAILURE.test(l)) ?? lines[lines.length - 1] ?? 'It exited without saying why.'
+  return line.length > 180 ? `${line.slice(0, 177)}…` : line
+}
+
+/** The command that runs a one-line test prompt through an agent's CLI. */
+export function testArgv(engine: Engine): string[] {
+  return argvFor({ engine, model: 'default' }, 'Reply with exactly the word OK and nothing else.', 'edit')
+}
+
+/** Lays what is known from real runs over what the credentials suggest. */
+export function applyHealth(agents: DetectedAgent[], health: Partial<Record<Engine, AgentHealth>>): DetectedAgent[] {
+  return agents.map(a => {
+    const h = health[a.engine]
+    if (!a.isInstalled || a.engine === 'claude' || !h || a.auth === 'missing') return a
+    return h.ok ? { ...a, auth: 'ok', failReason: undefined } : { ...a, auth: 'failing', failReason: h.reason }
+  })
 }
 
 /** The sign-in command for an agent's browser or device flow. */

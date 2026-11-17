@@ -1,8 +1,8 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Assignee, Autonomy, DetectedAgent, Engine, GroupBy, PmPlan, PmSprint, PmTab, PmTask, SigninState, SprintEdit, TaskStatus } from '../types'
-import { argvFor, detectAgents, opencodeMethod, signinArgv } from './agents'
+import type { AgentHealth, Assignee, Autonomy, DetectedAgent, Engine, GroupBy, PmPlan, PmSprint, PmTab, PmTask, SigninState, SprintEdit, TaskStatus } from '../types'
+import { ACCOUNT_FAILURE, applyHealth, argvFor, detectAgents, failureReason, opencodeMethod, signinArgv, testArgv } from './agents'
 import { CLAUDE_MODELS, DEFAULT_ASSIGNEE, ENGINES, assigneeLabel, parseAssigneeKey, schedule, taskPrompt } from './plan'
 import { PmView, TaskDialog } from './view'
 import type { ViewActions } from './view'
@@ -29,12 +29,14 @@ export const keyForAtom = atom({ plugin: 'pm-mode', key: 'keyFor' } as const, nu
 export const sprintEditAtom = atom({ plugin: 'pm-mode', key: 'sprintEdit' } as const, null as SprintEdit | null)
 export const showReportAtom = atom({ plugin: 'pm-mode', key: 'showReport' } as const, false)
 export const orchestratorAtom = atom({ plugin: 'pm-mode', key: 'orchestrator' } as const, 'claude-opus-5-5')
+export const testingAtom = atom({ plugin: 'pm-mode', key: 'testing' } as const, [] as Engine[])
 
 const PLAN_TOOL = 'mcp__pm-mode__pm_plan'
 const STATUS_TOOL = 'mcp__pm-mode__pm_status'
 const STORE_PLAN = 'plan'
 const STORE_AUTONOMY = 'autonomy'
 const STORE_ORCHESTRATOR = 'orchestrator'
+const STORE_HEALTH = 'health'
 const OUTPUT_CAP = 20000
 
 // Subagent answers that arrived before their spawn call returned its agentId.
@@ -111,7 +113,15 @@ async function orchestratorBrief($: EngineInterface): Promise<string> {
       const models = a.engine === 'claude' ? CLAUDE_MODELS.map(m => m.id) : a.models
       const shown = models.length > 25 ? `${models.slice(0, 25).join(', ')}, ... (${models.length} in all)` : models.join(', ')
       const types = a.agentTypes.length ? `; agent types: ${a.agentTypes.join(', ')}` : ''
-      return `- engine "${a.engine}" (${a.label}): models ${shown}${types}${a.note ? ` — ${a.note}` : ''}`
+      const state =
+        a.auth === 'failing'
+          ? ` — CANNOT RUN right now (${a.failReason ?? 'its last run was refused'}); do not assign it`
+          : a.auth === 'missing'
+            ? ' — not signed in; do not assign it'
+            : a.auth === 'unverified'
+              ? ' — signed in, not tested yet'
+              : ''
+      return `- engine "${a.engine}" (${a.label}): models ${shown}${types}${a.note ? ` — ${a.note}` : ''}${state}`
     })
   return [
     '# Claude mode for PM is on',
@@ -222,6 +232,9 @@ async function startExternal($: EngineInterface, p: PmPlan, t: PmTask) {
   } catch (err) {
     return finishTask($, t.id, 'failed', `${out}\n\nCould not run ${argv[0]}: ${String(err)}`)
   }
+  // A real run is the best health check there is: remember what it showed.
+  if (code === 0) await recordHealth($, t.assignee.engine, { ok: true, at: Date.now() })
+  else if (ACCOUNT_FAILURE.test(out)) await recordHealth($, t.assignee.engine, { ok: false, reason: failureReason(out), at: Date.now() })
   await finishTask($, t.id, code === 0 ? 'done' : 'failed', code === 0 ? out : `${out}\n\n(exit code ${code})`)
 }
 
@@ -291,9 +304,40 @@ function startTicker($: EngineInterface) {
 
 const stripAnsi = (s: string) => s.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '')
 
+type HealthMap = Partial<Record<Engine, AgentHealth>>
+
+const readHealth = async ($: EngineInterface) => ((await $.store.get(STORE_HEALTH)) ?? {}) as HealthMap
+
+/** Credentials say an agent may run; this is what its last real run said. */
+async function detectWithHealth($: EngineInterface) {
+  return applyHealth(await detectAgents($), await readHealth($))
+}
+
 async function refreshAgents($: EngineInterface) {
-  const agents = await detectAgents($)
+  const agents = await detectWithHealth($)
   await update($, agentsAtom, () => agents)
+}
+
+async function recordHealth($: EngineInterface, engine: Engine, health: AgentHealth) {
+  await $.store.set(STORE_HEALTH, { ...(await readHealth($)), [engine]: health })
+  await update($, agentsAtom, agents => applyHealth(agents, { [engine]: health }))
+}
+
+/** Runs a one-line prompt through an agent's CLI: the only proof it can run. */
+async function testAgent($: EngineInterface, engine: Engine) {
+  await update($, testingAtom, t => [...new Set([...t, engine])])
+  let health: AgentHealth
+  try {
+    const r = await $.process.run(testArgv(engine), { timeoutMs: 120000, stdin: '' })
+    health =
+      r.exitCode === 0 && /\bOK\b/.test(r.stdout)
+        ? { ok: true, at: Date.now() }
+        : { ok: false, reason: failureReason(`${r.stdout}\n${r.stderr}`), at: Date.now() }
+  } catch (err) {
+    health = { ok: false, reason: `No answer within 2 minutes (${String(err).slice(0, 80)})`, at: Date.now() }
+  }
+  await recordHealth($, engine, health)
+  await update($, testingAtom, t => t.filter(x => x !== engine))
 }
 
 /** Runs an agent CLI's sign-in, streaming what it prints (links, device codes) into the pane. */
@@ -436,6 +480,11 @@ function actionsFor($: EngineInterface): ViewActions {
     toggleSprint: n => void update($, collapsedAtom, c => (c.includes(n) ? c.filter(x => x !== n) : [...c, n])),
     setGroupBy: g => void update($, groupByAtom, () => g),
     toggleAgents: () => void update($, showAgentsAtom, v => !v),
+    testAgent: engine => void testAgent($, engine),
+    testAll: () =>
+      void read($, agentsAtom).then(agents =>
+        Promise.all(agents.filter(a => a.isInstalled && a.engine !== 'claude' && a.auth !== 'missing').map(a => testAgent($, a.engine))),
+      ),
     signIn: engine => {
       const argv = signinArgv(engine)
       if (argv) void runSignin($, engine, argv)
@@ -567,7 +616,7 @@ export const register: Register = on => {
     if (typeof orchestrator === 'string' && CLAUDE_MODELS.some(m => m.id === orchestrator)) await update($, orchestratorAtom, () => orchestrator)
     const autonomy = await $.store.get(STORE_AUTONOMY)
     if (autonomy === 'full' || autonomy === 'edit') await update($, autonomyAtom, () => autonomy)
-    void detectAgents($).then(agents => update($, agentsAtom, () => agents))
+    void detectWithHealth($).then(agents => update($, agentsAtom, () => agents))
     if ((await read($, planAtom))?.phase === 'running') startTicker($)
     if (await read($, isOnAtom)) void $.ui.open(PANE_ARGS)
     return next(e)
@@ -618,10 +667,11 @@ export const register: Register = on => {
     }
     let agents = await read($, agentsAtom)
     if (agents.length === 0) {
-      agents = await detectAgents($)
+      agents = await detectWithHealth($)
       await update($, agentsAtom, () => agents)
     }
-    const available = new Set<Engine>(['claude', ...agents.filter(a => a.isInstalled).map(a => a.engine)])
+    // An agent that cannot run (refused account, no sign-in) gets no tasks; they fall back to Claude.
+    const available = new Set<Engine>(['claude', ...agents.filter(a => a.isInstalled && a.auth !== 'failing' && a.auth !== 'missing').map(a => a.engine)])
     const plan = toPlan(e as unknown as PlanInput, available)
     if (typeof plan === 'string') return { result: `Plan refused: ${plan}` }
     await savePlan($, () => plan)
@@ -677,6 +727,7 @@ export const register: Register = on => {
       showAgents: await read($, showAgentsAtom),
       signin: await read($, signinAtom),
       keyFor: await read($, keyForAtom),
+      testing: await read($, testingAtom),
       sprintEdit: await read($, sprintEditAtom),
       showReport: await read($, showReportAtom),
       orchestrator: await read($, orchestratorAtom),
@@ -702,6 +753,7 @@ export const register: Register = on => {
       showAgents: await read($, showAgentsAtom),
       signin: await read($, signinAtom),
       keyFor: await read($, keyForAtom),
+      testing: await read($, testingAtom),
       sprintEdit: await read($, sprintEditAtom),
       showReport: await read($, showReportAtom),
       orchestrator: await read($, orchestratorAtom),
