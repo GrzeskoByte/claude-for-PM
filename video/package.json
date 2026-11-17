@@ -1,10 +1,10 @@
 {
   "name": "claude-for-pm-intro-video",
   "private": true,
-  "description": "Renders the README intro video frame by frame with @napi-rs/canvas and ffmpeg.",
+  "description": "Cuts the README intro from recordings of a real Claude Code session (record.sh), redrawn frame by frame with @napi-rs/canvas and encoded with ffmpeg.",
   "scripts": {
-    "mp4": "node render.js | ffmpeg -y -f rawvideo -pix_fmt rgba -s 1280x720 -r 30 -i - -c:v libx264 -pix_fmt yuv420p -crf 20 -preset slow -movflags +faststart ../assets/intro.mp4",
-    "gif": "STILL_BG=1 node render.js | ffmpeg -y -f rawvideo -pix_fmt rgba -s 1280x720 -r 30 -i - -vf \"fps=15,scale=960:-1:flags=lanczos,split[a][b];[a]palettegen=max_colors=128:stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle\" ../assets/intro.gif"
+    "mp4": "node render.js $CAPTURES | ffmpeg -y -f rawvideo -pix_fmt rgba -s 1280x720 -r 30 -i - -c:v libx264 -pix_fmt yuv420p -crf 18 -preset slow -movflags +faststart ../assets/intro.mp4",
+    "gif": "GIF=1 node render.js $CAPTURES | ffmpeg -y -f rawvideo -pix_fmt rgba -s 1280x720 -r 30 -i - -vf \"fps=15,scale=960:-1:flags=lanczos,split[a][b];[a]palettegen=max_colors=128:stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle\" ../assets/intro.gif"
   },
   "dependencies": {
     "@napi-rs/canvas": "0.1.65"

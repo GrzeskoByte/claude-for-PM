@@ -2,13 +2,13 @@
 
 **Plan sprints. Delegate to agents. Ship in parallel.**
 
-Claude mode for PM turns a Claude Code session into a project manager. Describe what you want built; the orchestrator (Opus 5.5 by default) breaks it into short tasks, lays them out in sprints on a Gantt timeline, and gives each task to the agent and model that fits it best: a Claude subagent, or a local agent CLI such as Codex, Gemini, OpenCode or Grok. You review the plan, change anything you like, press **Start sprint**, and watch the agents work in parallel. When the run ends, every report flows back to the orchestrator to review, fix and plan the next sprint.
+Claude mode for PM turns a Claude Code session into a project manager. Claude stays the **orchestrator**; the work goes to a team of agents. Describe what you want built and the orchestrator (Opus 5.5 by default) breaks it into short tasks, lays them out in sprints on a Gantt timeline, and hands **every task to its own agent and model**: a Claude subagent (Opus, Sonnet, Haiku) or a coding agent already on your computer, such as **Codex, Gemini, OpenCode or Grok**. You review the plan, reassign anything in one click, press **Start sprint**, and watch where every sprint stands, live. When the run ends you get one report from the orchestrator, which checks the work and re-plans whatever failed.
 
 <p align="center">
-  <img src="assets/intro.gif" alt="Intro: a goal becomes tasks, a Gantt timeline, model assignments, a parallel sprint run, and reports back to the orchestrator" width="960">
+  <img src="assets/intro.gif" alt="Real Claude Code session: Opus plans a sprint and delegates the code to Sonnet, the tests to Codex and the docs to Gemini; the run is tracked live, a failed task is handed to Codex, and Opus reports back" width="960">
 </p>
 
-<p align="center"><a href="assets/intro.mp4"><b>▶ Watch the intro in full quality (MP4, 36 s)</b></a></p>
+<p align="center"><a href="assets/intro.mp4"><b>▶ Watch it in full quality (MP4, 20 s)</b></a> · real footage from a Claude Code session, sped up</p>
 
 ## Why
 
@@ -72,10 +72,14 @@ In the desktop app, where `/plugin` does not run: click **+** next to the prompt
 
 Answer `y` to add the marketplace, then pick the user scope so the mod is on in every session.
 
-## The intro video is code
+## The intro video is real, and its edit is code
 
-`assets/intro.mp4` and `assets/intro.gif` are drawn frame by frame by [`video/render.js`](video/render.js) with `@napi-rs/canvas` and piped into ffmpeg. To render them again (needs Node and ffmpeg; the script loads Noto Sans, Noto Sans Symbols and JetBrains Mono from `/usr/share/fonts`):
+The intro is footage of a real Claude Code session in a small demo project: Opus planned the sprint, Sonnet, Codex and Gemini did the work, Gemini's task failed and was handed to Codex, and Opus wrote the report. [`video/record.sh`](video/record.sh) saved the tmux pane with its colors twice a second; [`video/render.js`](video/render.js) redraws those frames cell by cell, cuts and speeds them up, adds captions and highlights, and pipes the frames into ffmpeg. The recordings themselves are not in the repository. To make your own (needs tmux, Node and ffmpeg; the renderer loads Noto Sans, Noto Sans Symbols and JetBrains Mono from `/usr/share/fonts`):
 
 ```bash
-cd video && npm install && npm run mp4 && npm run gif
+tmux new-session -d -s pmdemo -x 160 -y 45 claude   # then use /pm in it
+video/record.sh pmdemo captures/run1                # touch captures/run1/STOP to finish
+cd video && npm install && CAPTURES=../captures/run1 npm run mp4 && CAPTURES=../captures/run1 npm run gif
 ```
+
+Edit `SEGMENTS` in `render.js` to pick the seconds, views and captions of each beat.
