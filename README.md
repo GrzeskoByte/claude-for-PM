@@ -2,7 +2,7 @@
 
 **Plan sprints. Delegate to agents. Ship in parallel.**
 
-Claude mode for PM turns a Claude Code session into a project manager. Claude stays the **orchestrator**; the work goes to a team of agents. Describe what you want built and the orchestrator (Opus 5.5 by default) breaks it into short tasks, lays them out in sprints on a Gantt timeline, and hands **every task to its own agent and model**: a Claude subagent (Opus, Sonnet, Haiku) or a coding agent already on your computer, such as **Codex, Gemini, OpenCode or Grok**. You review the plan, reassign anything in one click, press **Start sprint**, and watch where every sprint stands, live. When the run ends you get one report from the orchestrator, which checks the work and re-plans whatever failed.
+Claude mode for PM turns a Claude Code session into a project manager. Claude stays the **orchestrator**; the work goes to a team of agents. Describe what you want built and the orchestrator (Opus 5.5 by default) breaks it into short tasks, lays them out in sprints on a Gantt timeline, and hands **every task to its own agent and model**: a Claude subagent (Opus, Sonnet, Haiku) or a coding agent already on your computer, such as **Codex, Antigravity, OpenCode or Grok**. You review the plan, reassign anything in one click, press **Start sprint**, and watch where every sprint stands, live. When the run ends you get one report from the orchestrator, which checks the work and re-plans whatever failed.
 
 <p align="center">
   <img src="assets/intro.gif" alt="Real Claude Code session: Opus plans a sprint and delegates the code to Sonnet, the tests to Codex and the docs to Gemini; the run is tracked live, a failed task is handed to Codex, and Opus reports back" width="960">
@@ -42,15 +42,29 @@ Everything uses the app's own theme colors, so it follows light and dark mode.
 ## Agents and models
 
 - **Claude Code subagents**: Opus 5.5, Sonnet 5.5, Haiku 5.5, and any subagent type in `~/.claude/agents` or the project's `.claude/agents`.
-- **Codex**, **Gemini**, **OpenCode** and **Grok**: detected automatically when installed, with the models each one lists. Tasks given to them run headless in the current working directory.
+- **Codex**, **Antigravity**, **OpenCode** and **Grok**: detected automatically when installed, with the models each one lists. Tasks given to them run headless in the current working directory.
 
+### Signing in to agents
+
+The **Agents** section of the panel shows each agent's sign-in state and offers the sign-in methods it supports. Claude Code subagents need no sign-in, since they run inside this session.
+
+| Agent | Sign-in methods |
+| --- | --- |
+| **Claude Code** | None. Subagents use this session's account. |
+| **Codex** | **Sign in** runs `codex login` in the browser. Or paste an **OpenAI API key**. |
+| **Grok** | **Sign in** runs `grok login --device-auth`: open the link it shows and enter the code, with no terminal needed. |
+| **Antigravity** | **Sign in** runs `agy`, which starts its browser sign-in when no session is cached. Or paste a **Gemini API key**, which is saved readable only by you and set as the provider. |
+| **OpenCode** | **Sign in** connects ChatGPT with a device code (`opencode auth login openai --method chatgpt-headless`), with no terminal needed. Or enter a **provider** name to connect any other provider; OpenCode's free models work without signing in. |
 ## Commands
 
 | Command | What it does |
 | --- | --- |
 | `/pm` | Turns PM mode on and opens the panel. |
 | `/pm <goal>` | Turns PM mode on and starts planning that goal. |
+| `/pm add <task>` | Adds a task to the current sprint (the lowest sprint with unfinished tasks, or the last one). It gets the next free id, the default agent, a 10 minute estimate and no dependencies; the text becomes its title and its full description. If there is no plan yet, it creates one. Refused while a run is in progress. |
+| `/pm start` | Starts the run of the current plan, the same as **Start sprint** in the panel, without waiting for it to finish. Replies with a reason when there is no plan, a run is already going, or no task is waiting to run. |
 | `/pm agents` | Shows the agents on this computer and their sign-in state. |
+| `/pm backlog` | Turns PM mode on, opens the panel on the **Backlog** view and shows every plan kept for this directory (its history): archived plans first, then the current plan. Each plan lists its sprints with done/total counts and its tasks with status, id, title, assignee and estimate. |
 | `/pm off` | Turns PM mode off; the plan stays on the board. |
 | `/pm clear` | Removes the plan. |
 

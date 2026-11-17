@@ -1,4 +1,9 @@
 import { expect, mock, test } from 'claude-code/testing'
+import { argvFor, signinArgv } from '../hooks/agents.js'
+import type { On } from 'claude-code'
+import type { Engine as TestEngine } from 'claude-code/testing'
+import type { PmPlan } from '../types'
+import { DEFAULT_ASSIGNEE } from '../hooks/plan.js'
 
 const PANE = {
   plugin: 'pm-mode',
@@ -29,9 +34,9 @@ const PLAN = {
   ],
 }
 
-function world(on: Parameters<Parameters<typeof test>[1]>[1], opts: { codexTest?: 'ok' | 'refused' } = {}) {
-  mock.store(on)
-  mock.clock(on)
+function world(on: On, opts: { codexTest?: 'ok' | 'refused'; agy?: boolean; plan?: PmPlan } = {}) {
+  mock.store(on, opts.plan ? { plan: opts.plan } : {})
+  const clock = mock.clock(on)
   mock.env(on, { HOME: '/home/u' })
   const spawned: { prompt: string; model?: string; description?: string }[] = []
   const submitted: string[] = []
@@ -46,21 +51,28 @@ function world(on: Parameters<Parameters<typeof test>[1]>[1], opts: { codexTest?
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   on('session.cwd', () => ({ value: '/work' }))
   on('fs.list', () => ({ value: [] }))
-  on('fs.read', () => ({ value: '{}' }))
+  on('fs.exists', (_, e) => ({ value: !!opts.agy && e.path.endsWith('antigravity-cli/settings.json') }))
+  on('fs.read', (_, e) => {
+    if (opts.agy && e.path.endsWith('pm-mode-key')) return { value: 'KEY123\n' }
+    if (opts.agy && e.path.endsWith('antigravity-cli/settings.json')) return { value: JSON.stringify({ modelProvider: 'gemini' }) }
+    return { value: '{}' }
+  })
   // Only codex is "installed" on this fake computer.
   on('process.run', (_, e) => {
     const cmd = e.argv.join(' ')
-    if (cmd.includes('command -v codex')) return { value: { exitCode: 0, stdout: '/bin/codex\n', stderr: '' } }
+    if (opts.agy && cmd.includes('command -v agy')) return { value: { isStdoutTruncated: false, isStderrTruncated: false, exitCode: 0, stdout: '/bin/agy\n', stderr: '' } }
+    if (opts.agy && cmd === 'agy models') return { value: { isStdoutTruncated: false, isStderrTruncated: false, exitCode: 0, stdout: 'gemini-3-pro\ngemini-3-flash\n', stderr: '' } }
+    if (cmd.includes('command -v codex')) return { value: { isStdoutTruncated: false, isStderrTruncated: false, exitCode: 0, stdout: '/bin/codex\n', stderr: '' } }
     if (cmd.startsWith('codex exec') && cmd.includes('Reply with exactly the word OK')) {
       return opts.codexTest === 'ok'
-        ? { value: { exitCode: 0, stdout: 'OK\n', stderr: '' } }
-        : { value: { exitCode: 1, stdout: '', stderr: 'Error: API error (status 402 Payment Required): usage balance exhausted\n' } }
+        ? { value: { isStdoutTruncated: false, isStderrTruncated: false, exitCode: 0, stdout: 'OK\n', stderr: '' } }
+        : { value: { isStdoutTruncated: false, isStderrTruncated: false, exitCode: 1, stdout: '', stderr: 'Error: API error (status 402 Payment Required): usage balance exhausted\n' } }
     }
-    if (cmd === 'codex login status') return { value: { exitCode: 0, stdout: 'Logged in using ChatGPT', stderr: '' } }
+    if (cmd === 'codex login status') return { value: { isStdoutTruncated: false, isStderrTruncated: false, exitCode: 0, stdout: 'Logged in using ChatGPT', stderr: '' } }
     if (cmd === 'codex debug models') {
-      return { value: { exitCode: 0, stdout: JSON.stringify({ models: [{ slug: 'gpt-6.1-sol', visibility: 'list' }] }), stderr: '' } }
+      return { value: { isStdoutTruncated: false, isStderrTruncated: false, exitCode: 0, stdout: JSON.stringify({ models: [{ slug: 'gpt-6.1-sol', visibility: 'list' }] }), stderr: '' } }
     }
-    return { value: { exitCode: 1, stdout: '', stderr: '' } }
+    return { value: { isStdoutTruncated: false, isStderrTruncated: false, exitCode: 1, stdout: '', stderr: '' } }
   })
   on('agent.spawn', (_, e) => {
     spawned.push({ prompt: e.prompt, model: e.model, description: e.description })
@@ -80,7 +92,7 @@ function world(on: Parameters<Parameters<typeof test>[1]>[1], opts: { codexTest?
     return { value: { code: 0, signal: null } }
   })
   on('turn.complete', (_, e) => ({ text: e.answer }))
-  return { spawned, submitted, opened }
+  return { spawned, submitted, opened, clock }
 }
 
 const DIALOG = { ...PANE, requestId: 'pm-task', props: { ...PANE.props, title: 'Task' } } as const
@@ -102,12 +114,12 @@ test('Opus plan lands on the board, Gantt and agents view on every surface', asy
     }
     if (surface === 'mobile') expect(await ui.find({ key: 'view-next' })).toBeDefined()
     else {
-      await ui.select({ key: 'view', value: 'timeline:agent' })
+      await $.ui.select({ plugin: 'pm-mode', surface, key: 'view', value: 'timeline:agent' })
       expect(await ui.find({ type: 'Text', text: /^Agent$/ })).toBeDefined()
-      await ui.select({ key: 'view', value: 'timeline:task' })
-      await ui.select({ key: 'view', value: 'board:task' })
+      await $.ui.select({ plugin: 'pm-mode', surface, key: 'view', value: 'timeline:task' })
+      await $.ui.select({ plugin: 'pm-mode', surface, key: 'view', value: 'board:task' })
       expect(await ui.find({ type: 'Text', text: /Running 0/ })).toBeDefined()
-      await ui.select({ key: 'view', value: 'timeline:task' })
+      await $.ui.select({ plugin: 'pm-mode', surface, key: 'view', value: 'timeline:task' })
     }
     await ui.press({ key: 'agents-toggle' })
     expect(await ui.find({ type: 'Text', text: /Not tested/ })).toBeDefined()
@@ -239,4 +251,183 @@ test('a test prompt that answers marks the agent as working', async ($, on) => {
   await ui.press({ key: 'test-codex' })
   expect(await ui.find({ type: 'Text', text: /Works/ })).toBeDefined()
   await ui.unmount()
+})
+
+test('Antigravity (agy) is detected, runs with the saved key, and reports its auth', async ($, on) => {
+  world(on, { agy: true })
+  await $.session.start({ cwd: '/work', surface: 'desktop', isInteractive: true })
+  await $.tool.call({ tool: 'mcp__pm-mode__pm_plan', ...PLAN })
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await ui.press({ key: 'agents-toggle' })
+  // Installed, and the saved key + gemini provider count as credentials (auth "unverified"), so it offers a test.
+  expect(await ui.find({ key: 'test-antigravity' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /Not tested/ })).toBeDefined()
+  await ui.unmount()
+
+  const argv = argvFor({ engine: 'antigravity', model: 'gemini-3-pro' }, 'do it', 'edit')
+  expect(argv.slice(-6)).toEqual(['--mode', 'accept-edits', '--model', 'gemini-3-pro', '-p', 'do it'])
+  expect(argv).toContain('agy')
+  expect(argv.join(' ')).toContain('GEMINI_API_KEY')
+  expect(argv.join(' ')).not.toContain('KEY123')
+})
+
+const PM_COMMAND = { command: 'pm', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 100 } } as const
+
+async function currentPlan($: TestEngine): Promise<PmPlan> {
+  return JSON.parse(String((await $.tool.call({ tool: 'mcp__pm-mode__pm_status' })).result)) as PmPlan
+}
+
+// Seed persisted plans so command guards can be tested without racing a live run.
+function savedPlan(phase: PmPlan['phase'] = 'review'): PmPlan {
+  return {
+    goal: PLAN.goal,
+    sprints: PLAN.sprints,
+    phase,
+    createdAt: 0,
+    tasks: PLAN.tasks.map((t, i) => ({
+      ...t,
+      dependsOn: t.dependsOn ?? [],
+      assignee: { engine: t.engine, model: t.model } as PmPlan['tasks'][number]['assignee'],
+      status: i < 3 ? 'done' : 'todo',
+      plannedStart: 0,
+    })),
+  }
+}
+
+test('browser and device sign-in use the expected CLI arguments', async () => {
+  expect(signinArgv('antigravity')).toEqual(['agy', '-p', 'Reply with exactly the word OK and nothing else.'])
+  expect(signinArgv('opencode')).toEqual(['opencode', 'auth', 'login', 'openai', '--method', 'chatgpt-headless'])
+  expect(signinArgv('codex')).toEqual(['codex', 'login'])
+  expect(signinArgv('grok')).toEqual(['grok', 'login', '--device-auth'])
+  expect(signinArgv('claude')).toBeUndefined()
+})
+
+test('/pm add appends to the current unfinished sprint and persists the task', async ($, on) => {
+  const original = savedPlan()
+  const { opened, submitted } = world(on, { plan: original })
+  await $.session.start({ cwd: '/work', surface: 'desktop', isInteractive: true })
+  const text = 'Add export regression coverage for quoted fields and embedded newlines in CSV reports'
+  const result = await $.command.run({ ...PM_COMMAND, args: `add ${text}` })
+  expect(result.text).toBe(`Added #T6 to sprint 2: ${text}`)
+  await $.session.start({ cwd: '/work', surface: 'desktop', isInteractive: true })
+  const plan = await currentPlan($)
+  expect(plan.tasks.slice(0, 5).map(t => [t.id, t.status, t.sprint])).toEqual(original.tasks.map(t => [t.id, t.status, t.sprint]))
+  expect(plan.tasks[5]).toEqual(expect.objectContaining({
+    id: 'T6', title: text.slice(0, 60), definition: text, sprint: 2,
+    estimateMin: 10, dependsOn: [], assignee: DEFAULT_ASSIGNEE, status: 'todo',
+  }))
+  expect(plan.tasks[5]!.plannedStart).toBe(30)
+  expect(opened).toContain('pm-mode')
+  expect(submitted).toEqual([])
+})
+
+test('/pm add creates a review plan when none exists', async ($, on) => {
+  const { opened } = world(on)
+  await $.session.start({ cwd: '/work', surface: 'desktop', isInteractive: true })
+  expect((await $.command.run({ ...PM_COMMAND, args: 'add Write docs' })).text).toBe('Added #T1 to sprint 1: Write docs')
+  const plan = await currentPlan($)
+  expect(plan.goal).toBe('Untitled plan')
+  expect(plan.phase).toBe('review')
+  expect(plan.sprints).toEqual([{ n: 1, name: 'Sprint 1' }])
+  expect(plan.tasks.length).toBe(1)
+  expect(plan.tasks[0]).toEqual(expect.objectContaining({ id: 'T1', definition: 'Write docs', sprint: 1, status: 'todo', plannedStart: 0 }))
+  expect(opened).toContain('pm-mode')
+})
+
+test('/pm add with empty text shows usage without creating a plan', async ($, on) => {
+  const { opened, submitted } = world(on)
+  await $.session.start({ cwd: '/work', surface: 'desktop', isInteractive: true })
+  for (const args of ['add', 'add   ', ' add \n\t ']) {
+    expect((await $.command.run({ ...PM_COMMAND, args })).text).toBe('Usage: /pm add <task>')
+  }
+  expect((await $.tool.call({ tool: 'mcp__pm-mode__pm_status' })).result).toBe('No plan on the board.')
+  expect(opened).toEqual([])
+  expect(submitted).toEqual([])
+})
+
+test('/pm start without a plan explains how to create one', async ($, on) => {
+  const { spawned, opened, submitted } = world(on)
+  await $.session.start({ cwd: '/work', surface: 'desktop', isInteractive: true })
+  expect((await $.command.run({ ...PM_COMMAND, args: 'start' })).text).toBe('No plan to start. Plan a goal with /pm <goal> or add a task with /pm add <task>.')
+  expect((await $.tool.call({ tool: 'mcp__pm-mode__pm_status' })).result).toBe('No plan on the board.')
+  expect(spawned).toEqual([])
+  expect(opened).toEqual([])
+  expect(submitted).toEqual([])
+})
+
+test('/pm start rejects an already running plan without restarting work', async ($, on) => {
+  const { spawned, clock } = world(on)
+  await $.session.start({ cwd: '/work', surface: 'desktop', isInteractive: true })
+  await $.tool.call({ tool: 'mcp__pm-mode__pm_plan', ...PLAN })
+  expect((await $.command.run({ ...PM_COMMAND, args: 'start' })).text).toBe('Started the run.')
+  expect((await $.command.run({ ...PM_COMMAND, args: 'start' })).text).toBe('A run is already in progress.')
+  await clock.advance(1)
+  expect(spawned.map(s => s.description)).toEqual(['#T1 Export endpoint'])
+})
+
+test('/pm start launches the reviewed plan and reports its result', async ($, on) => {
+  const { spawned, submitted, opened, clock } = world(on)
+  await $.session.start({ cwd: '/work', surface: 'desktop', isInteractive: true })
+  await $.tool.call({ tool: 'mcp__pm-mode__pm_plan', ...PLAN })
+  expect((await $.command.run({ ...PM_COMMAND, args: 'start' })).text).toBe('Started the run.')
+  // The run starts once the command hook has returned.
+  expect(spawned).toEqual([])
+  await clock.advance(1)
+  const plan = JSON.parse(String((await $.tool.call({ tool: 'mcp__pm-mode__pm_status' })).result)) as PmPlan
+  expect(spawned.map(s => s.description)).toEqual(['#T1 Export endpoint'])
+  expect(plan.startedAt).toBeDefined()
+  expect(plan.tasks.find(t => t.id === 'T3')!.status).toBe('done')
+  expect(plan.phase).toBe('done')
+  expect(submitted.length).toBe(1)
+  expect(opened).toContain('pm-mode')
+})
+
+test('/pm <goal> returns first and submits the goal as a prompt afterwards', async ($, on) => {
+  const { submitted, opened, clock } = world(on)
+  await $.session.start({ cwd: '/work', surface: 'desktop', isInteractive: true })
+  const result = await $.command.run({ ...PM_COMMAND, args: 'write a hello world script' })
+  expect(result.text).toBe('Claude mode for PM is on. Planning: write a hello world script')
+  expect(opened).toContain('pm-mode')
+  // Submitting from inside the command hook is refused by the host, so it happens on a later tick.
+  expect(submitted).toEqual([])
+  await clock.advance(1)
+  expect(submitted).toEqual(['write a hello world script'])
+})
+
+test('/pm backlog with nothing planned shows an empty state', async ($, on) => {
+  const { opened } = world(on)
+  await $.session.start({ cwd: '/work', surface: 'desktop', isInteractive: true })
+  expect((await $.command.run({ ...PM_COMMAND, args: 'backlog' })).text).toBe('Backlog: 0 plan(s), 0 task(s) in this directory.')
+  expect(opened).toContain('pm-mode')
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(await ui.find({ type: 'Text', text: /No sprints in this directory yet/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('/pm clear archives the plan and /pm backlog lists archived and current sprints', async ($, on) => {
+  const { opened } = world(on, { plan: savedPlan() })
+  await $.session.start({ cwd: '/work', surface: 'desktop', isInteractive: true })
+  await $.command.run({ ...PM_COMMAND, args: 'clear' })
+  expect((await $.tool.call({ tool: 'mcp__pm-mode__pm_status' })).result).toBe('No plan on the board.')
+  await $.command.run({ ...PM_COMMAND, args: 'add Fresh task' })
+  const result = await $.command.run({ ...PM_COMMAND, args: 'backlog' })
+  expect(result.text).toBe('Backlog: 2 plan(s), 6 task(s) in this directory.')
+  expect(opened).toContain('pm-mode')
+  for (const surface of ['terminal', 'desktop', 'mobile'] as const) {
+    const ui = await $.ui.mount({ ...PANE, surface })
+    expect(await ui.find({ type: 'Text', text: /Add CSV export to the reports page \(archived\)/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /Untitled plan \(current\)/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /Sprint 1 · Sprint 1 · Backend|Sprint 1 · .*3\/3 done/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /Export endpoint/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /Fresh task/ })).toBeDefined()
+    await ui.unmount()
+  }
+})
+
+test('pm_status answers a subagent call', async ($, on) => {
+  world(on)
+  await $.session.start({ cwd: '/work', surface: 'desktop', isInteractive: true })
+  await $.tool.call({ tool: 'mcp__pm-mode__pm_plan', ...PLAN })
+  const r = await $.tool.call({ tool: 'mcp__pm-mode__pm_status', agentId: 'agent-1' })
+  expect(String(r.result)).toContain('Add CSV export')
 })

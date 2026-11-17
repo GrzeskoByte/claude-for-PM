@@ -7,11 +7,11 @@ export const CLAUDE_MODELS: { id: string; label: string; alias: string }[] = [
   { id: 'claude-haiku-5-5', label: 'Haiku 5.5', alias: 'haiku' },
 ]
 export const DEFAULT_ASSIGNEE: Assignee = { engine: 'claude', model: 'claude-opus-5-5' }
-export const ENGINES: Engine[] = ['claude', 'codex', 'gemini', 'opencode', 'grok']
+export const ENGINES: Engine[] = ['claude', 'codex', 'antigravity', 'opencode', 'grok']
 export const ENGINE_LABEL: Record<Engine, string> = {
   claude: 'Claude',
   codex: 'Codex',
-  gemini: 'Gemini',
+  antigravity: 'Antigravity',
   opencode: 'OpenCode',
   grok: 'Grok',
 }
@@ -25,7 +25,7 @@ const MODEL_COLOR: Record<string, string> = {
 const ENGINE_COLOR: Record<Engine, string> = {
   claude: 'claude',
   codex: 'ide',
-  gemini: 'suggestion',
+  antigravity: 'suggestion',
   opencode: 'merged',
   grok: 'inactive',
 }

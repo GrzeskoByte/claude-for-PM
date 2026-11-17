@@ -1,4 +1,4 @@
-export type Engine = 'claude' | 'gemini' | 'codex' | 'opencode' | 'grok'
+export type Engine = 'claude' | 'antigravity' | 'codex' | 'opencode' | 'grok'
 export type Assignee = { engine: Engine; model: string; agentType?: string }
 export type TaskStatus = 'todo' | 'running' | 'done' | 'failed' | 'cancelled'
 export type PmTask = {
@@ -49,7 +49,7 @@ export type DetectedAgent = {
   /** How this agent signs in from the pane: a browser/device flow, and the label of an API key field. */
   signin: { browser: boolean; apiKey?: string; provider?: string }
 }
-export type PmTab = 'timeline' | 'board'
+export type PmTab = 'timeline' | 'board' | 'backlog'
 export type GroupBy = 'task' | 'agent'
 export type Autonomy = 'edit' | 'full'
 export type SprintEdit = { n: number; value: string }

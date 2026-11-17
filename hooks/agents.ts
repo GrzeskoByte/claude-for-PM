@@ -68,22 +68,20 @@ async function modelsOf($: EngineInterface, engine: Engine): Promise<{ models: s
     const models = [...text.matchAll(/^\s*[*-]\s+([\w.-]+)/gm)].map(m => m[1]!)
     return { models }
   }
-  // Gemini CLI has no model listing: offer its default plus a model pinned in settings.
-  const home = await $.env.get('HOME')
-  try {
-    const settings = JSON.parse(await $.fs.read(`${home}/.gemini/settings.json`)) as { model?: { name?: string } }
-    return { models: settings.model?.name ? [settings.model.name] : [] }
-  } catch {
-    return { models: [] }
-  }
+  // Antigravity CLI (`agy models`) lists model slugs, one per line; needs a signed-in session.
+  const r = await run($, ['agy', 'models'], 60000)
+  const models = (r?.stdout ?? '').split('\n').map(l => l.trim().replace(/^[*-]\s+/, '').split(/\s+/)[0] ?? '').filter(l => /^[\w.-]+$/.test(l))
+  return { models, note: models.length ? undefined : 'No models listed (sign in with `agy` once).' }
 }
+
+const BIN: Partial<Record<Engine, string>> = { antigravity: 'agy' }
 
 const SIGNIN: Record<Engine, DetectedAgent['signin']> = {
   claude: { browser: false },
   codex: { browser: true, apiKey: 'OpenAI API key' },
   grok: { browser: true },
-  gemini: { browser: false, apiKey: 'Gemini API key' },
-  opencode: { browser: false, provider: 'Provider to connect' },
+  antigravity: { browser: true, apiKey: 'Gemini API key' },
+  opencode: { browser: true, provider: 'Provider to connect' },
 }
 
 /** Whether an agent CLI holds credentials, read from its own status commands and files. */
@@ -107,14 +105,16 @@ async function authOf($: EngineInterface, engine: Engine): Promise<{ auth: AuthS
       ? { auth: 'unverified', authNote: `Connected: ${providers.join(', ')}.` }
       : { auth: 'unverified', authNote: 'No provider connected; the free OpenCode models still work.' }
   }
-  // Gemini: an API key in the environment or ~/.gemini/.env, or a cached Google sign-in.
+  // Antigravity: GEMINI_API_KEY (with modelProvider "gemini"), or a cached sign-in kept in the OS keyring.
   const home = await $.env.get('HOME')
-  if ((await $.env.get('GEMINI_API_KEY')) || (await $.env.get('GOOGLE_API_KEY'))) return { auth: 'unverified', authNote: 'Using an API key from the environment.' }
+  if (await $.env.get('GEMINI_API_KEY')) return { auth: 'unverified', authNote: 'Using an API key from the environment.' }
   try {
-    if (/GEMINI_API_KEY\s*=\s*\S/.test(await $.fs.read(`${home}/.gemini/.env`))) return { auth: 'unverified', authNote: 'Using the API key in ~/.gemini/.env.' }
+    const hasKey = (await $.fs.read(`${home}/.gemini/pm-mode-key`)).trim().length > 0
+    const provider = JSON.parse(await $.fs.read(`${home}/.gemini/antigravity-cli/settings.json`))?.modelProvider
+    if (hasKey && provider === 'gemini') return { auth: 'unverified', authNote: 'Using the saved Gemini API key.' }
   } catch {}
-  if (home && (await $.fs.exists(`${home}/.gemini/oauth_creds.json`))) return { auth: 'unverified', authNote: 'Signed in with Google.' }
-  return { auth: 'missing', authNote: 'Add an API key here, or run `gemini` once in a terminal to sign in with Google.' }
+  if (home && (await $.fs.exists(`${home}/.gemini/antigravity-cli/settings.json`))) return { auth: 'unverified', authNote: 'Antigravity is set up; sign-in is cached by agy.' }
+  return { auth: 'missing', authNote: 'Add an API key here, or run `agy` once in a terminal to sign in.' }
 }
 
 // Words an agent CLI prints when it refuses to run for its account, not for the task.
@@ -152,6 +152,10 @@ export function applyHealth(agents: DetectedAgent[], health: Partial<Record<Engi
 export function signinArgv(engine: Engine): string[] | undefined {
   if (engine === 'codex') return ['codex', 'login']
   if (engine === 'grok') return ['grok', 'login', '--device-auth']
+  // agy has no login subcommand: a print-mode run starts its browser sign-in when no session is cached.
+  if (engine === 'antigravity') return ['agy', '-p', 'Reply with exactly the word OK and nothing else.']
+  // ChatGPT device flow works without a terminal; other providers go through "Connect provider".
+  if (engine === 'opencode') return ['opencode', 'auth', 'login', 'openai', '--method', 'chatgpt-headless']
   return undefined
 }
 
@@ -167,10 +171,10 @@ export async function opencodeMethod($: EngineInterface, provider: string): Prom
 }
 
 export async function detectAgents($: EngineInterface): Promise<DetectedAgent[]> {
-  const external: Engine[] = ['codex', 'gemini', 'opencode', 'grok']
+  const external: Engine[] = ['codex', 'antigravity', 'opencode', 'grok']
   const found = await Promise.all(
     external.map(async (engine): Promise<DetectedAgent> => {
-      const path = await which($, engine)
+      const path = await which($, BIN[engine] ?? engine)
       if (!path) {
         return { engine, label: ENGINE_LABEL[engine], isInstalled: false, models: [], agentTypes: [], auth: 'unknown', signin: SIGNIN[engine] }
       }
@@ -197,9 +201,11 @@ export function argvFor(a: Assignee, prompt: string, autonomy: Autonomy): string
   const full = autonomy === 'full'
   const model = a.model && a.model !== 'default' ? a.model : undefined
   switch (a.engine) {
-    case 'gemini':
-      return ['gemini', '--skip-trust', '--approval-mode', full ? 'yolo' : 'auto_edit',
-        ...(model ? ['-m', model] : []), '-p', prompt]
+    case 'antigravity':
+      // agy ignores .env: pass the saved key as GEMINI_API_KEY (read from a private file, not argv).
+      return ['sh', '-c', 'f="$HOME/.gemini/pm-mode-key"; if [ -r "$f" ]; then GEMINI_API_KEY=$(cat "$f"); export GEMINI_API_KEY; fi; exec "$@"', 'sh',
+        'agy', ...(full ? ['--dangerously-skip-permissions'] : ['--mode', 'accept-edits']),
+        ...(model ? ['--model', model] : []), '-p', prompt]
     case 'codex':
       return ['codex', 'exec', '--skip-git-repo-check', '-s', full ? 'danger-full-access' : 'workspace-write',
         ...(model ? ['-m', model] : []), prompt]
