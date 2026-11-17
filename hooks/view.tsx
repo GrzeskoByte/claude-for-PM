@@ -385,6 +385,12 @@ function barLabel(t: PmTask, widthPct: number, data: ViewData, groupBy: GroupBy)
   return id.length <= chars + 1 ? id : STATUS[t.status].icon
 }
 
+/** Adds the running time to a bar's label only where it fits, so a short bar never wraps. */
+function fitLabel(label: string, took: string, widthPct: number, columns: number): string {
+  const room = Math.floor((widthPct / 100) * columns * 0.6) - 1
+  return took && (label + took).length <= room ? label + took : label
+}
+
 /** A row's right side: spacer, bars and spacers whose widths add up to 100%. */
 function track(el: El, data: ViewData, plan: PmPlan, tasks: PmTask[], scale: number, actions: ViewActions) {
   const { Box, Text, Button } = el
@@ -412,7 +418,7 @@ function track(el: El, data: ViewData, plan: PmPlan, tasks: PmTask[], scale: num
           <Box key={`barbox-${t.id}`} width={widths[i]} backgroundColor={barColor(t)} overflow="hidden" paddingY="xs" paddingX="xs">
             <Button key={`bar-${t.id}`} plain onPress={() => actions.select(isSelected ? null : t.id)}>
               <Text color="inverseText" bold={isSelected} underline={isSelected} wrap="truncate-end">
-                {barLabel(t, parseInt(widths[i]!, 10), data, data.groupBy) + took || ' '}
+                {fitLabel(barLabel(t, parseInt(widths[i]!, 10), data, data.groupBy), took, parseInt(widths[i]!, 10), data.columns) || ' '}
               </Text>
             </Button>
           </Box>

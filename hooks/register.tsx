@@ -185,7 +185,7 @@ async function startClaude($: EngineInterface, p: PmPlan, t: PmTask) {
     prompt: taskPrompt(p, t),
     description: `#${t.id} ${t.title}`.slice(0, 60),
     subagentType: t.assignee.agentType || 'general-purpose',
-    model: t.assignee.model,
+    model: CLAUDE_MODELS.find(m => m.id === t.assignee.model)?.alias ?? t.assignee.model,
   })
   if ('deny' in spawned && spawned.deny) return finishTask($, t.id, 'failed', `Not started: ${spawned.deny}`)
   const agentId = 'agentId' in spawned ? spawned.agentId : undefined
@@ -634,7 +634,7 @@ export const register: Register = on => {
       .map(t => `#${t.id} [sprint ${t.sprint}, +${t.plannedStart}m, ${t.estimateMin}m] ${t.title} → ${assigneeLabel(t.assignee)}`)
       .join('\n')
     return {
-      result: `The plan is on the PM board, waiting for the user's approval:\n${summary}\n\nStop here: tell the user in one or two sentences that the plan is ready for review in the PM pane (they can reassign models per task or sprint, then press Approve & run). Do not start the work yourself.`,
+      result: `The plan is on the PM board, waiting for the user's approval:\n${summary}\n\nStop here: tell the user in one or two sentences that the plan is ready for review in the PM pane (they can reassign models per task or sprint, then press Start sprint). Do not start the work yourself.`,
     }
   })
 

@@ -183,7 +183,7 @@ test('reassign a sprint, approve, run in order, and report back to Opus', async 
 
   // Sprint 1: T1 goes to a Sonnet subagent and T3 runs in the Codex CLI, in
   // parallel; T2 waits for T1, and sprint 2 waits for all of sprint 1.
-  expect(spawned.map(s => [s.description, s.model])).toEqual([['#T1 Export endpoint', 'claude-sonnet-5-5']])
+  expect(spawned.map(s => [s.description, s.model])).toEqual([['#T1 Export endpoint', 'sonnet']])
   expect(spawned[0]!.prompt).toContain('Add GET /reports.csv')
   const plan = JSON.parse(String((await $.tool.call({ tool: 'mcp__pm-mode__pm_status' })).result)) as {
     phase: string

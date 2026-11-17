@@ -1,9 +1,10 @@
 import type { Assignee, DetectedAgent, Engine, PmPlan, PmSprint, PmTask, TaskStatus } from '../types'
 
-export const CLAUDE_MODELS: { id: string; label: string }[] = [
-  { id: 'claude-opus-5-5', label: 'Opus 5.5' },
-  { id: 'claude-sonnet-5-5', label: 'Sonnet 5.5' },
-  { id: 'claude-haiku-5-5', label: 'Haiku 5.5' },
+// `alias` is what the subagent launcher takes: it refuses full model ids.
+export const CLAUDE_MODELS: { id: string; label: string; alias: string }[] = [
+  { id: 'claude-opus-5-5', label: 'Opus 5.5', alias: 'opus' },
+  { id: 'claude-sonnet-5-5', label: 'Sonnet 5.5', alias: 'sonnet' },
+  { id: 'claude-haiku-5-5', label: 'Haiku 5.5', alias: 'haiku' },
 ]
 export const DEFAULT_ASSIGNEE: Assignee = { engine: 'claude', model: 'claude-opus-5-5' }
 export const ENGINES: Engine[] = ['claude', 'codex', 'gemini', 'opencode', 'grok']
@@ -144,6 +145,8 @@ export const STATUS_MARK: Record<TaskStatus, string> = {
 }
 
 export function fmtMin(m: number): string {
+  // Real runs often take under a minute: show seconds rather than "0m".
+  if (m > 0 && m < 1) return `${Math.max(1, Math.round(m * 60))}s`
   if (m < 60) return `${Math.round(m)}m`
   const h = Math.floor(m / 60)
   const r = Math.round(m % 60)
