@@ -34,6 +34,8 @@ export const testingAtom = atom({ plugin: 'pm-mode', key: 'testing' } as const, 
 const PLAN_TOOL = 'mcp__pm-mode__pm_plan'
 const STATUS_TOOL = 'mcp__pm-mode__pm_status'
 const STORE_PLAN = 'plan'
+const STORE_HISTORY = 'history'
+const HISTORY_CAP = 50
 const STORE_AUTONOMY = 'autonomy'
 const STORE_ORCHESTRATOR = 'orchestrator'
 const STORE_HEALTH = 'health'
@@ -180,6 +182,21 @@ async function savePlan($: EngineInterface, change: (p: PmPlan | null) => PmPlan
   const next = await update($, planAtom, change)
   await $.store.set(STORE_PLAN, next)
   return next
+}
+
+/** Archived plans are kept per project directory (the session cwd), newest last. */
+const historyKey = async ($: EngineInterface) => `${STORE_HISTORY}:${await $.session.cwd()}`
+
+export async function readHistory($: EngineInterface): Promise<PmPlan[]> {
+  const list = await $.store.get(await historyKey($))
+  return Array.isArray(list) ? (list as PmPlan[]) : []
+}
+
+/** Add a plan to this directory's history; a plan already archived (same createdAt) is replaced, not duplicated. */
+export async function archivePlan($: EngineInterface, plan: PmPlan | null | undefined): Promise<void> {
+  if (!plan || plan.tasks.length === 0) return
+  const rest = (await readHistory($)).filter(p => p.createdAt !== plan.createdAt)
+  await $.store.set(await historyKey($), [...rest, plan].slice(-HISTORY_CAP))
 }
 
 const patchTask = ($: EngineInterface, id: string, patch: Partial<PmTask>) =>
@@ -368,17 +385,24 @@ async function runSignin($: EngineInterface, engine: Engine, argv: string[], inp
   await update($, signinAtom, s => (s && s.engine === engine ? (code === 0 ? null : { ...s, isRunning: false, ok: false }) : s))
 }
 
-async function saveGeminiKey($: EngineInterface, key: string) {
+async function saveAntigravityKey($: EngineInterface, key: string) {
+  // agy ignores .env files: it reads GEMINI_API_KEY from its environment (set when pm-mode spawns it)
+  // and only uses it when settings.json says modelProvider is "gemini".
   const home = await $.env.get('HOME')
-  const path = `${home}/.gemini/.env`
-  let text = ''
+  const dir = `${home}/.gemini`
+  const keyPath = `${dir}/pm-mode-key`
+  const settingsPath = `${dir}/antigravity-cli/settings.json`
+  await $.process.run(['mkdir', '-p', `${dir}/antigravity-cli`]).catch(() => undefined)
+  await $.fs.write(keyPath, `${key.trim()}\n`)
+  await $.process.run(['chmod', '600', keyPath]).catch(() => undefined)
+  let settings: Record<string, unknown> = {}
   try {
-    text = await $.fs.read(path)
+    const parsed = JSON.parse(await $.fs.read(settingsPath))
+    if (parsed && typeof parsed === 'object') settings = parsed
   } catch {}
-  const kept = text.split('\n').filter(l => l.trim() && !/^\s*GEMINI_API_KEY\s*=/.test(l))
-  await $.fs.write(path, [...kept, `GEMINI_API_KEY=${key}`, ''].join('\n'))
-  await $.process.run(['chmod', '600', path]).catch(() => undefined)
-  await update($, signinAtom, (): SigninState => ({ engine: 'gemini', log: `Saved the key to ${path} (readable by you only).`, isRunning: false, ok: true }))
+  settings.modelProvider = 'gemini'
+  await $.fs.write(settingsPath, `${JSON.stringify(settings, null, 2)}\n`)
+  await update($, signinAtom, (): SigninState => ({ engine: 'antigravity', log: `Saved the key to ${keyPath} (readable by you only) and set modelProvider to "gemini".`, isRunning: false, ok: true }))
   await refreshAgents($)
 }
 
@@ -500,7 +524,7 @@ function actionsFor($: EngineInterface): ViewActions {
       await update($, keyForAtom, () => null)
       if (!v) return
       if (engine === 'codex') return runSignin($, engine, ['codex', 'login', '--with-api-key'], `${v}\n`)
-      if (engine === 'gemini') return saveGeminiKey($, v)
+      if (engine === 'antigravity') return saveAntigravityKey($, v)
       if (engine === 'opencode') {
         const provider = v.split(/\s+/)[0]!
         const { method, methods, error } = await opencodeMethod($, provider)
@@ -524,12 +548,7 @@ function actionsFor($: EngineInterface): ViewActions {
       void signinStream?.return(undefined).catch(() => undefined)
       void update($, signinAtom, () => null)
     },
-    approve: async () => {
-      await savePlan($, p => p && { ...p, phase: 'running', startedAt: Date.now() })
-      await update($, nowAtom, () => Date.now())
-      startTicker($)
-      await pump($)
-    },
+    approve: () => startRun($),
     stop: async () => {
       const p = await savePlan($, plan => {
         if (!plan) return plan
@@ -579,12 +598,24 @@ function actionsFor($: EngineInterface): ViewActions {
   }
 }
 
+// Shared by the pane's approve button and `/pm start`.
+async function beginRun($: EngineInterface): Promise<void> {
+  await savePlan($, p => p && { ...p, phase: 'running', startedAt: Date.now() })
+  await update($, nowAtom, () => Date.now())
+  startTicker($)
+}
+
+async function startRun($: EngineInterface): Promise<void> {
+  await beginRun($)
+  await pump($)
+}
+
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({
       name: 'pm',
-      description: 'Claude mode for PM: open the sprint board (/pm), plan a goal (/pm <goal>), or turn it off (/pm off)',
-      argumentHint: '[goal | off | clear | agents]',
+      description: 'Claude mode for PM: open the sprint board (/pm), plan a goal (/pm <goal>), add a task (/pm add <task>), run it (/pm start), or turn it off (/pm off)',
+      argumentHint: '[goal | add <task> | start | off | clear | agents | backlog]',
     })
     await $.tool.register({
       name: 'pm_plan',
@@ -616,7 +647,10 @@ export const register: Register = on => {
     if (typeof orchestrator === 'string' && CLAUDE_MODELS.some(m => m.id === orchestrator)) await update($, orchestratorAtom, () => orchestrator)
     const autonomy = await $.store.get(STORE_AUTONOMY)
     if (autonomy === 'full' || autonomy === 'edit') await update($, autonomyAtom, () => autonomy)
-    void detectWithHealth($).then(agents => update($, agentsAtom, () => agents))
+    // Detection runs in the background; if the session ends before it finishes, drop the result.
+    void detectWithHealth($)
+      .then(agents => update($, agentsAtom, () => agents))
+      .catch(() => undefined)
     if ((await read($, planAtom))?.phase === 'running') startTicker($)
     if (await read($, isOnAtom)) void $.ui.open(PANE_ARGS)
     return next(e)
@@ -629,18 +663,77 @@ export const register: Register = on => {
       return { text: 'Claude mode for PM is off. The plan stays on the board.' }
     }
     if (arg === 'clear') {
+      await archivePlan($, await read($, planAtom))
       await savePlan($, () => null)
       return { text: 'PM plan cleared.' }
     }
+    if (arg === 'start') {
+      const current = await read($, planAtom)
+      if (!current || current.tasks.length === 0) return { text: 'No plan to start. Plan a goal with /pm <goal> or add a task with /pm add <task>.' }
+      if (current.phase === 'running') return { text: 'A run is already in progress.' }
+      if (!current.tasks.some(t => t.status === 'todo')) return { text: 'Nothing to run: no tasks are waiting.' }
+      await update($, isOnAtom, () => true)
+      await $.ui.open(PANE_ARGS)
+      // Mark the run as started now so a second /pm start is refused, but spawn the agents
+      // (and submit Opus's report when it ends) once the hook has returned: the host refuses
+      // those while it holds this command.
+      await beginRun($)
+      $.clock.after(0, () => void pump($))
+      return { text: 'Started the run.' }
+    }
+    const addMatch = /^add(?:\s+([\s\S]*))?$/.exec(arg)
+    if (addMatch) {
+      const title = (addMatch[1] ?? '').trim()
+      if (!title) return { text: 'Usage: /pm add <task>' }
+      const current = await read($, planAtom)
+      if (current?.phase === 'running') return { text: 'A run is in progress. Add the task after it ends.' }
+      let added = ''
+      let sprintN = 1
+      await savePlan($, p => {
+        const base: PmPlan = p ?? { goal: 'Untitled plan', sprints: [], tasks: [], phase: 'review', createdAt: Date.now() }
+        let n = base.tasks.length + 1
+        while (base.tasks.some(t => t.id === `T${n}`)) n++
+        added = `T${n}`
+        // Current sprint: the first one with unfinished work, else the last one.
+        const open = base.tasks.filter(t => t.status !== 'done').map(t => t.sprint)
+        sprintN = open.length ? Math.min(...open) : Math.max(1, ...base.tasks.map(t => t.sprint))
+        const task: PmTask = {
+          id: added,
+          title: title.slice(0, 60),
+          definition: title,
+          sprint: sprintN,
+          estimateMin: 10,
+          dependsOn: [],
+          assignee: { ...DEFAULT_ASSIGNEE },
+          status: 'todo',
+          plannedStart: 0,
+        }
+        const sprints = base.sprints.some(s => s.n === sprintN) ? base.sprints : [...base.sprints, { n: sprintN, name: `Sprint ${sprintN}` }]
+        return { ...replan(base, [...base.tasks, task]), sprints }
+      })
+      await update($, isOnAtom, () => true)
+      await update($, tabAtom, () => 'timeline')
+      await $.ui.open(PANE_ARGS)
+      return { text: `Added #${added} to sprint ${sprintN}: ${title}` }
+    }
     await update($, isOnAtom, () => true)
     await $.ui.open(PANE_ARGS)
+    if (arg === 'backlog') {
+      await update($, tabAtom, () => 'backlog')
+      const cur = await read($, planAtom)
+      const all = [...(await readHistory($)).filter(h => h.createdAt !== cur?.createdAt), ...(cur ? [cur] : [])]
+      const n = all.reduce((c, h) => c + h.tasks.length, 0)
+      return { text: `Backlog: ${all.length} plan(s), ${n} task(s) in this directory.` }
+    }
     if (arg === 'agents') {
       await update($, showAgentsAtom, () => true)
       return { text: 'Claude mode for PM: showing the agents on this computer.' }
     }
     if (arg) {
       await update($, tabAtom, () => 'timeline')
-      void $.prompt.submit({ text: arg })
+      // A command.run hook may not submit: the host refuses a prompt that would wait on the
+      // command it is holding. Submit once the hook has returned.
+      $.clock.after(0, () => void $.prompt.submit({ text: arg }))
       return { text: `Claude mode for PM is on. Planning: ${arg}` }
     }
     return { text: 'Claude mode for PM is on. Describe what you want built; the orchestrator plans it on the board.' }
@@ -674,6 +767,7 @@ export const register: Register = on => {
     const available = new Set<Engine>(['claude', ...agents.filter(a => a.isInstalled && a.auth !== 'failing' && a.auth !== 'missing').map(a => a.engine)])
     const plan = toPlan(e as unknown as PlanInput, available)
     if (typeof plan === 'string') return { result: `Plan refused: ${plan}` }
+    await archivePlan($, current)
     await savePlan($, () => plan)
     await update($, selectedAtom, () => null)
     await $.ui.close({ id: TASK_PANE })
@@ -688,10 +782,23 @@ export const register: Register = on => {
     }
   })
 
+  // Answers the orchestrator and every subagent alike (a subagent's call carries e.agentId).
+  // The plan comes from the atom, and from the persisted store when the atom cannot be read in
+  // that loop, so a failing read never leaves the call without an answer.
+  const statusResult = (plan: PmPlan | null | undefined) =>
+    plan ? { result: JSON.stringify(plan, null, 1).slice(0, 60000) } : { result: 'No plan on the board.' }
   on('tool.call', { tool: STATUS_TOOL }, async $ => {
-    const plan = await read($, planAtom)
-    if (!plan) return { result: 'No plan on the board.' }
-    return { result: JSON.stringify(plan, null, 1).slice(0, 60000) }
+    let plan: PmPlan | null | undefined
+    try {
+      plan = await read($, planAtom)
+    } catch {
+      plan = undefined
+    }
+    if (!plan) plan = ((await $.store.get(STORE_PLAN)) as PmPlan | null | undefined) ?? null
+    return statusResult(plan)
+  }).catch(async ($, _e, next) => {
+    if (next.called) return next(_e)
+    return statusResult(((await $.store.get(STORE_PLAN)) as PmPlan | null | undefined) ?? null)
   })
 
   on('turn.complete', async ($, e, next) => {
@@ -731,6 +838,7 @@ export const register: Register = on => {
       sprintEdit: await read($, sprintEditAtom),
       showReport: await read($, showReportAtom),
       orchestrator: await read($, orchestratorAtom),
+      history: await readHistory($),
       columns: e.props.bodyColumns ?? e.viewport?.columns ?? 100,
       surface: e.surface,
     }
@@ -757,6 +865,7 @@ export const register: Register = on => {
       sprintEdit: await read($, sprintEditAtom),
       showReport: await read($, showReportAtom),
       orchestrator: await read($, orchestratorAtom),
+      history: await readHistory($),
       columns: e.props.bodyColumns ?? e.viewport?.columns ?? 100,
       surface: e.surface,
     }

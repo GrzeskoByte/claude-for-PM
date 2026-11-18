@@ -30,6 +30,7 @@ export type ViewData = {
   sprintEdit: SprintEdit | null
   showReport: boolean
   orchestrator: string
+  history: PmPlan[]
   surface: string
   columns: number
 }
@@ -84,10 +85,11 @@ const VIEWS = [
   { value: 'timeline:task', label: 'Timeline · by sprint' },
   { value: 'timeline:agent', label: 'Timeline · by agent' },
   { value: 'board:task', label: 'Board' },
+  { value: 'backlog:task', label: 'Backlog' },
 ]
 const INSTALL: Partial<Record<Engine, string>> = {
   codex: 'https://github.com/openai/codex',
-  gemini: 'https://github.com/google-gemini/gemini-cli',
+  antigravity: 'https://antigravity.google/docs/cli',
   opencode: 'https://opencode.ai',
 }
 
@@ -807,7 +809,7 @@ export function PmView(props: { el: El; data: ViewData; actions: ViewActions }) 
       <Text inverse bold color={data.isOn ? 'success' : 'inactive'}>{data.isOn ? ' PM ON ' : ' PM OFF '}</Text>
     </Button>
   )
-  const viewValue = `${data.tab}:${data.tab === 'board' ? 'task' : data.groupBy}`
+  const viewValue = `${data.tab}:${data.tab === 'timeline' ? data.groupBy : 'task'}`
   const setView = (v: string) => {
     const [tab, group] = v.split(':') as [PmTab, GroupBy]
     actions.setTab(tab)
@@ -883,7 +885,7 @@ export function PmView(props: { el: El; data: ViewData; actions: ViewActions }) 
     mode,
   )
 
-  const viewPicker = plan && (
+  const viewPicker = (plan || data.tab === 'backlog') && (
     <Box flexDirection="row" gap={1}>
       {Select ? (
         <Select key="view" options={VIEWS} value={viewValue} onSelect={(v: string) => setView(v)} />
@@ -917,7 +919,9 @@ export function PmView(props: { el: El; data: ViewData; actions: ViewActions }) 
             </Button>
           </Box>,
         )}
+      {data.tab === 'backlog' && section(el, 'sec-backlog', 'Backlog', 'permission', backlog(el, data), viewPicker)}
       {plan &&
+        data.tab !== 'backlog' &&
         section(
           el,
           'sec-plan',
@@ -940,6 +944,48 @@ export function PmView(props: { el: El; data: ViewData; actions: ViewActions }) 
             </Button>
           ) : undefined,
         )}
+    </Box>
+  )
+}
+
+/** Every sprint of this directory: archived plans first, the current plan last. */
+function backlog(el: El, data: ViewData) {
+  const { Box, Text } = el
+  const cur = data.plan
+  const plans = [...(data.history ?? []).filter(h => h.createdAt !== cur?.createdAt), ...(cur ? [cur] : [])]
+  if (plans.length === 0) return <Text dimColor>No sprints in this directory yet. Plan a goal with /pm &lt;goal&gt;.</Text>
+  return (
+    <Box flexDirection="column" gap="md">
+      {plans.map(p => {
+        const ns = [...new Set([...p.sprints.map(s => s.n), ...p.tasks.map(t => t.sprint)])].sort((a, b) => a - b)
+        return (
+          <Box key={`plan-${p.createdAt}`} flexDirection="column" gap="sm">
+            <Text bold wrap="wrap">
+              {p.goal}
+              {p === cur ? ' (current)' : ' (archived)'}
+            </Text>
+            {ns.map(n => {
+              const tasks = p.tasks.filter(t => t.sprint === n)
+              const done = tasks.filter(t => t.status === 'done').length
+              return (
+                <Box key={`sprint-${p.createdAt}-${n}`} flexDirection="column">
+                  <Text bold dimColor>
+                    {`Sprint ${n} · ${sprintName(p.sprints, n)} · ${done}/${tasks.length} done`}
+                  </Text>
+                  {tasks.map(t => (
+                    <Box key={`task-${p.createdAt}-${t.id}`} flexDirection="row" gap={1}>
+                      <Text color={STATUS[t.status].color}>{STATUS[t.status].icon}</Text>
+                      <Text dimColor>{t.id}</Text>
+                      <Text wrap="truncate-end">{t.title}</Text>
+                      <Text dimColor>{`· ${assigneeLabel(t.assignee)} · ${fmtMin(t.estimateMin)}`}</Text>
+                    </Box>
+                  ))}
+                </Box>
+              )
+            })}
+          </Box>
+        )
+      })}
     </Box>
   )
 }
