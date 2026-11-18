@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { AgentHealth, Assignee, Autonomy, DetectedAgent, Engine, GroupBy, PmPlan, PmSprint, PmTab, PmTask, SigninState, SprintEdit, TaskStatus } from '../types'
-import { ACCOUNT_FAILURE, applyHealth, argvFor, detectAgents, failureReason, opencodeMethod, signinArgv, testArgv } from './agents'
+import { ACCOUNT_FAILURE, applyHealth, argvFor, detectAgents, failureReason, installArgv, opencodeMethod, signinArgv, testArgv } from './agents'
 import { CLAUDE_MODELS, DEFAULT_ASSIGNEE, ENGINES, assigneeLabel, parseAssigneeKey, schedule, taskPrompt } from './plan'
 import { PmView, TaskDialog } from './view'
 import type { ViewActions } from './view'
@@ -513,6 +513,10 @@ function actionsFor($: EngineInterface): ViewActions {
       const argv = signinArgv(engine)
       if (argv) void runSignin($, engine, argv)
     },
+    install: engine => {
+      const argv = installArgv(engine)
+      if (argv) void runSignin($, engine, argv)
+    },
     confirmSignin: async () => {
       await signinStream?.return(undefined).catch(() => undefined)
       await update($, signinAtom, () => null)
@@ -525,6 +529,11 @@ function actionsFor($: EngineInterface): ViewActions {
       if (!v) return
       if (engine === 'codex') return runSignin($, engine, ['codex', 'login', '--with-api-key'], `${v}\n`)
       if (engine === 'antigravity') return saveAntigravityKey($, v)
+      if (engine === 'pi') {
+        const provider = v.split(/\s+/)[0]!
+        // --no-browser prints a device code or link into the pane, so no terminal is needed.
+        return runSignin($, engine, ['pi', 'auth', 'login', provider, '--no-browser'])
+      }
       if (engine === 'opencode') {
         const provider = v.split(/\s+/)[0]!
         const { method, methods, error } = await opencodeMethod($, provider)

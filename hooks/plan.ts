@@ -6,14 +6,15 @@ export const CLAUDE_MODELS: { id: string; label: string; alias: string }[] = [
   { id: 'claude-sonnet-5-5', label: 'Sonnet 5.5', alias: 'sonnet' },
   { id: 'claude-haiku-5-5', label: 'Haiku 5.5', alias: 'haiku' },
 ]
-export const DEFAULT_ASSIGNEE: Assignee = { engine: 'claude', model: 'claude-opus-5-5' }
-export const ENGINES: Engine[] = ['claude', 'codex', 'antigravity', 'opencode', 'grok']
+export const DEFAULT_ASSIGNEE: Assignee = { engine: 'claude', model: 'claude-sonnet-5-5' }
+export const ENGINES: Engine[] = ['claude', 'codex', 'antigravity', 'opencode', 'grok', 'pi']
 export const ENGINE_LABEL: Record<Engine, string> = {
   claude: 'Claude',
   codex: 'Codex',
   antigravity: 'Antigravity',
   opencode: 'OpenCode',
   grok: 'Grok',
+  pi: 'Pi',
 }
 
 // Theme color keys, so bars follow the app's own (light or dark) color scheme.
@@ -28,6 +29,7 @@ const ENGINE_COLOR: Record<Engine, string> = {
   antigravity: 'suggestion',
   opencode: 'merged',
   grok: 'inactive',
+  pi: 'autoAccept',
 }
 
 export const TERMINAL: TaskStatus[] = ['done', 'failed', 'cancelled']
@@ -69,9 +71,32 @@ export function assigneeOptions(agents: DetectedAgent[]): { value: string; label
   }))
   for (const ag of agents) {
     if (ag.engine === 'claude' || !ag.isInstalled) continue
-    for (const m of ag.models) out.push({ value: `${ag.engine}|${m}`, label: `${ag.label} · ${m}` })
+    const locked = new Set(ag.needsAuth ?? [])
+    for (const m of ag.models) out.push({ value: `${ag.engine}|${m}`, label: `${ag.label} · ${m}${locked.has(m) ? ' (sign in)' : ''}` })
   }
   return out
+}
+
+/** Installed engines for the agent picker (Claude is always offered). */
+export function agentOptions(agents: DetectedAgent[], current?: Engine): { value: string; label: string }[] {
+  const out = ENGINES.filter(e => e === 'claude' || e === current || agents.find(a => a.engine === e)?.isInstalled).map(e => ({
+    value: e,
+    label: ENGINE_LABEL[e],
+  }))
+  return out
+}
+
+/** Models of one engine, for the model picker. */
+export function modelOptions(agents: DetectedAgent[], engine: Engine): { value: string; label: string }[] {
+  if (engine === 'claude') return CLAUDE_MODELS.map(m => ({ value: m.id, label: m.label }))
+  const models = agents.find(a => a.engine === engine)?.models ?? []
+  return models.length ? models.map(m => ({ value: m, label: m })) : [{ value: 'default', label: 'default' }]
+}
+
+/** Key for the first/default model when switching agent. */
+export function defaultModelKey(agents: DetectedAgent[], engine: Engine): string {
+  if (engine === 'claude') return `claude|${DEFAULT_ASSIGNEE.model}`
+  return `${engine}|${modelOptions(agents, engine)[0]!.value}`
 }
 
 /**

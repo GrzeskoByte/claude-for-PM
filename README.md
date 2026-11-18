@@ -2,7 +2,7 @@
 
 **Plan sprints. Delegate to agents. Ship in parallel.**
 
-Claude mode for PM turns a Claude Code session into a project manager. Claude stays the **orchestrator**; the work goes to a team of agents. Describe what you want built and the orchestrator (Opus 5.5 by default) breaks it into short tasks, lays them out in sprints on a Gantt timeline, and hands **every task to its own agent and model**: a Claude subagent (Opus, Sonnet, Haiku) or a coding agent already on your computer, such as **Codex, Antigravity, OpenCode or Grok**. You review the plan, reassign anything in one click, press **Start sprint**, and watch where every sprint stands, live. When the run ends you get one report from the orchestrator, which checks the work and re-plans whatever failed.
+Claude mode for PM turns a Claude Code session into a project manager. Claude stays the **orchestrator**; the work goes to a team of agents. Describe what you want built and the orchestrator (Opus 5.5 by default) breaks it into short tasks, lays them out in sprints on a Gantt timeline, and hands **every task to its own agent and model**: a Claude subagent (Opus, Sonnet, Haiku) or a coding agent already on your computer, such as **Codex, Antigravity, OpenCode, Grok or Pi**. You review the plan, reassign anything in one click, press **Start sprint**, and watch where every sprint stands, live. When the run ends you get one report from the orchestrator, which checks the work and re-plans whatever failed.
 
 <p align="center">
   <img src="assets/intro.gif" alt="Real Claude Code session: Opus plans a sprint and delegates the code to Sonnet, the tests to Codex and the docs to Gemini; the run is tracked live, a failed task is handed to Codex, and Opus reports back" width="960">
@@ -23,7 +23,7 @@ Big changes are rarely one task. They are a handful of pieces, some of which can
 
 1. **Describe the goal** in the normal prompt box while PM mode is on (`/pm`).
 2. **The orchestrator plans it**: short tasks, estimates, sprints, dependencies, and an agent and model for each task.
-3. **Review on the timeline**: click any task to open it in a dialog and change its model, estimate, sprint or dependencies; use **Assign all** to hand a whole sprint to one model.
+3. **Review on the timeline**: click any task to open it in a dialog and change its agent, model, estimate, sprint or dependencies; use **Assign all** to hand a whole sprint to one agent and model. New tasks default to **Claude · Sonnet**.
 4. **Start sprint**: Claude tasks run as Claude Code subagents, other tasks run headless in their CLI, in parallel where the plan allows.
 5. **Reports return** to the orchestrator, which reviews them and plans the next sprint. Failed tasks can get another model and **Retry failed**.
 
@@ -33,8 +33,8 @@ Big changes are rarely one task. They are a handful of pieces, some of which can
 | --- | --- |
 | **Project** | The goal and its status, the **orchestrator** picker (Opus 5.5, Sonnet 5.5 or Haiku 5.5), **Agents**, and **Start sprint**, which becomes **Stop** while running and **Retry failed** after failures. |
 | **Timeline** | A Jira-style Gantt chart grouped by sprint or by agent, or a **Board** with To do / Running / Done / Failed columns. Bars wear their model's color until they finish, then green, red or grey. |
-| **Tasks** | One line per task with its status and a model picker. |
-| **Task dialog** | Opens when you click a task: Assignment, Schedule, Description and Result sections, with previous / next task links. |
+| **Tasks** | One line per task with its status and an agent and model picker. |
+| **Task dialog** | Opens when you click a task: Assignment, Schedule, Description and Result sections, with previous / next task links. The assignment has two selectors: **Agent** (Claude, or any installed CLI) and **Model** (the models that agent lists). Changing the agent resets the model to that agent's default. |
 | **Agents** | The agent CLIs found on this computer and their models, sign-in for each (browser, device code or API key), and whether external agents may only edit files or run anything. |
 
 Everything uses the app's own theme colors, so it follows light and dark mode.
@@ -42,8 +42,10 @@ Everything uses the app's own theme colors, so it follows light and dark mode.
 ## Agents and models
 
 - **Claude Code subagents**: Opus 5.5, Sonnet 5.5, Haiku 5.5, and any subagent type in `~/.claude/agents` or the project's `.claude/agents`.
-- **Codex**, **Antigravity**, **OpenCode** and **Grok**: detected automatically when installed, with the models each one lists. Tasks given to them run headless in the current working directory.
-
+- **Codex**, **Antigravity**, **OpenCode**, **Grok** and **Pi**: detected automatically when installed, with the models each one lists. Tasks given to them run headless in the current working directory.
+- **OpenCode** lists every model in its catalog, from all providers (about 10,000 `provider/model` ids), not only the ones you are signed in to. Models from providers you have not connected yet are marked **(sign in)** in the picker. The connected ones come first.
+- **Pi** (`pi`, from `@earendil-works/pi-coding-agent`) lists every provider's models the same way: signed-in providers first, the rest marked **(sign in)**. Models are shown as `provider/model`.
+- **Installing Pi**: when Pi is missing, the **Agents** section shows an **Install** button. It runs `mise use -g pi` when [mise](https://mise.jdx.dev) is installed, and `npm install -g @earendil-works/pi-coding-agent` otherwise. The output streams under the agent row.
 ### Signing in to agents
 
 The **Agents** section of the panel shows each agent's sign-in state and offers the sign-in methods it supports. Claude Code subagents need no sign-in, since they run inside this session.
@@ -55,6 +57,7 @@ The **Agents** section of the panel shows each agent's sign-in state and offers 
 | **Grok** | **Sign in** runs `grok login --device-auth`: open the link it shows and enter the code, with no terminal needed. |
 | **Antigravity** | **Sign in** runs `agy`, which starts its browser sign-in when no session is cached. Or paste a **Gemini API key**, which is saved readable only by you and set as the provider. |
 | **OpenCode** | **Sign in** connects ChatGPT with a device code (`opencode auth login openai --method chatgpt-headless`), with no terminal needed. Or enter a **provider** name to connect any other provider; OpenCode's free models work without signing in. |
+| **Pi** | Enter a **provider** name and **Sign in** runs `pi auth login <provider> --no-browser` in the pane, which streams the device code or link. API keys are not entered here: run `pi auth login <provider> --api-key` in a terminal, or set the provider's environment variable. Pi's models that need sign-in are marked **(sign in)** until a provider is connected. |
 ## Commands
 
 | Command | What it does |

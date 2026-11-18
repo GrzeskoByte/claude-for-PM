@@ -1,4 +1,4 @@
-export type Engine = 'claude' | 'antigravity' | 'codex' | 'opencode' | 'grok'
+export type Engine = 'claude' | 'antigravity' | 'codex' | 'opencode' | 'grok' | 'pi'
 export type Assignee = { engine: Engine; model: string; agentType?: string }
 export type TaskStatus = 'todo' | 'running' | 'done' | 'failed' | 'cancelled'
 export type PmTask = {
@@ -40,6 +40,8 @@ export type DetectedAgent = {
   isInstalled: boolean
   path?: string
   models: string[]
+  /** Models in `models` whose provider is not signed in yet (OpenCode lists every provider). */
+  needsAuth?: string[]
   agentTypes: string[]
   note?: string
   auth: AuthState

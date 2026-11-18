@@ -1,9 +1,9 @@
 import { expect, mock, test } from 'claude-code/testing'
-import { argvFor, signinArgv } from '../hooks/agents.js'
+import { argvFor, parsePiModels, signinArgv } from '../hooks/agents.js'
 import type { On } from 'claude-code'
 import type { Engine as TestEngine } from 'claude-code/testing'
 import type { PmPlan } from '../types'
-import { DEFAULT_ASSIGNEE } from '../hooks/plan.js'
+import { DEFAULT_ASSIGNEE, agentOptions, defaultModelKey, modelOptions } from '../hooks/plan.js'
 
 const PANE = {
   plugin: 'pm-mode',
@@ -146,7 +146,8 @@ test('clicking a task opens it in a dialog where it is edited', async ($, on) =>
   expect(await dlg.find({ key: 'close-T3' })).toBeDefined()
   await dlg.press({ key: 'est-T3-up' })
   await dlg.press({ key: 'dep-T3-T1' })
-  await dlg.select({ key: 'as-T3', value: 'claude|claude-haiku-5-5' })
+  await dlg.select({ key: 'as-ag-T3', value: 'claude' })
+  await dlg.select({ key: 'as-md-T3', value: 'claude-haiku-5-5' })
   await dlg.unmount()
   let t3 = (await plan()).tasks.find(t => t.id === 'T3')!
   expect(t3.estimateMin).toBe(6)
@@ -155,8 +156,13 @@ test('clicking a task opens it in a dialog where it is edited', async ($, on) =>
   expect(t3.assignee.model).toBe('claude-haiku-5-5')
 
   // The task list under the chart reassigns too.
-  await ui.select({ key: 'li-as-T5', value: 'codex|gpt-6.1-sol' })
-  expect((await plan()).tasks.find(t => t.id === 'T5')!.assignee).toEqual({ engine: 'codex', model: 'gpt-6.1-sol' })
+  // Picking an agent resets the model to that agent's first model; the model picker then narrows it.
+  await ui.select({ key: 'li-as-ag-T5', value: 'codex' })
+  expect((await plan()).tasks.find(t => t.id === 'T5')!.assignee.engine).toBe('codex')
+  await ui.select({ key: 'li-as-ag-T5', value: 'claude' })
+  expect((await plan()).tasks.find(t => t.id === 'T5')!.assignee).toEqual({ engine: 'claude', model: 'claude-sonnet-5-5' })
+  await ui.select({ key: 'li-as-md-T5', value: 'claude-opus-5-5' })
+  expect((await plan()).tasks.find(t => t.id === 'T5')!.assignee.model).toBe('claude-opus-5-5')
 
   // T1 cannot wait for T3 now: that would be a loop.
   await ui.press({ key: 'bar-T1' })
@@ -300,6 +306,31 @@ test('browser and device sign-in use the expected CLI arguments', async () => {
   expect(signinArgv('codex')).toEqual(['codex', 'login'])
   expect(signinArgv('grok')).toEqual(['grok', 'login', '--device-auth'])
   expect(signinArgv('claude')).toBeUndefined()
+})
+
+test('pi runs headless with the chosen model and reads its model table', async () => {
+  expect(argvFor({ engine: 'pi', model: 'anthropic/claude-sonnet-5-5' }, 'go', 'edit')).toEqual(
+    ['pi', '-p', '--no-session', '--exclude-tools', 'bash', '--model', 'anthropic/claude-sonnet-5-5', 'go'],
+  )
+  expect(argvFor({ engine: 'pi', model: 'default' }, 'go', 'full')).toEqual(['pi', '-p', '--no-session', 'go'])
+  const table = 'provider    model            context  max-out  thinking  images\nanthropic   claude-opus-5-5  1M       128K     yes       yes\nopenrouter  ~openai/gpt-6    400K     128K     yes       no\n'
+  expect(parsePiModels(table)).toEqual(['anthropic/claude-opus-5-5', 'openrouter/~openai/gpt-6'])
+  expect(parsePiModels('No models available. Use /login to log into a provider via OAuth or API key. See:\n  /x/providers.md\n')).toEqual([])
+})
+
+test('agent and model selectors default to Claude Sonnet and list every model', async () => {
+  expect(DEFAULT_ASSIGNEE).toEqual({ engine: 'claude', model: 'claude-sonnet-5-5' })
+  const oc = Array.from({ length: 500 }, (_, i) => `prov${i % 20}/model-${i}`)
+  const agents = [
+    { engine: 'opencode', label: 'OpenCode', isInstalled: true, models: oc, needsAuth: oc.slice(100) },
+    { engine: 'pi', label: 'Pi', isInstalled: true, models: ['anthropic/claude-opus-5-5'] },
+    { engine: 'codex', label: 'Codex', isInstalled: false, models: ['gpt-6.1-sol'] },
+  ] as unknown as Parameters<typeof agentOptions>[0]
+  expect(agentOptions(agents).map(o => o.value)).toEqual(['claude', 'opencode', 'pi'])
+  expect(modelOptions(agents, 'opencode').map(o => o.value)).toEqual(oc)
+  expect(modelOptions(agents, 'pi').map(o => o.value)).toEqual(['anthropic/claude-opus-5-5'])
+  expect(defaultModelKey(agents, 'claude')).toBe('claude|claude-sonnet-5-5')
+  expect(defaultModelKey(agents, 'pi')).toBe('pi|anthropic/claude-opus-5-5')
 })
 
 test('/pm add appends to the current unfinished sprint and persists the task', async ($, on) => {

@@ -11,7 +11,7 @@ import type {
   SprintEdit,
   TaskStatus,
 } from '../types'
-import { actualWindow, assigneeKey, assigneeLabel, assigneeOptions, CLAUDE_MODELS, colorOf, fmtMin, maxParallel, modelLabel, planSpan, sprintName } from './plan'
+import { actualWindow, agentOptions, assigneeKey, assigneeOptions, assigneeLabel, CLAUDE_MODELS, defaultModelKey, modelOptions, colorOf, fmtMin, maxParallel, modelLabel, planSpan, sprintName } from './plan'
 
 export type ViewData = {
   isOn: boolean
@@ -59,6 +59,7 @@ export type ViewActions = {
   setAutonomy: (a: Autonomy) => void
   openAgent: (agentId: string) => void
   signIn: (engine: Engine) => void
+  install: (engine: Engine) => void
   confirmSignin: () => void
   showKeyInput: (engine: Engine | null) => void
   submitKey: (engine: Engine, value: string) => void
@@ -91,6 +92,7 @@ const INSTALL: Partial<Record<Engine, string>> = {
   codex: 'https://github.com/openai/codex',
   antigravity: 'https://antigravity.google/docs/cli',
   opencode: 'https://opencode.ai',
+  pi: 'https://pi.dev',
 }
 
 type El = any
@@ -156,19 +158,27 @@ function modelSelect(el: El, data: ViewData, t: PmTask, actions: ViewActions, ke
   if (data.plan?.phase === 'running' || t.status === 'done' || t.status === 'running') {
     return modelChip(el, t.assignee)
   }
-  const options = assigneeOptions(data.agents)
-  const value = assigneeKey(t.assignee)
-  if (!options.some(o => o.value === value)) options.unshift({ value, label: assigneeLabel(t.assignee) })
+  const { Box } = el
+  const engine = t.assignee.engine
+  const agentOpts = agentOptions(data.agents, engine)
+  const modelOpts = modelOptions(data.agents, engine)
+  if (!modelOpts.some(o => o.value === t.assignee.model)) modelOpts.unshift({ value: t.assignee.model, label: modelLabel(t.assignee) })
   if (!Select) {
-    const at = options.findIndex(o => o.value === value)
-    const next = options[(at + 1) % options.length]!
+    const keys = agentOpts.flatMap(ag => modelOptions(data.agents, ag.value as Engine).map(m => `${ag.value}|${m.value}`))
+    const cur = assigneeKey(t.assignee)
+    const next = keys[(Math.max(0, keys.indexOf(cur)) + 1) % keys.length]!
     return (
-      <Button key={`${keyBase}-${t.id}`} plain onPress={() => actions.assignTask(t.id, next.value)}>
+      <Button key={`${keyBase}-${t.id}`} plain onPress={() => actions.assignTask(t.id, next)}>
         {assigneeLabel(t.assignee)} <Text dimColor>↻</Text>
       </Button>
     )
   }
-  return <Select key={`${keyBase}-${t.id}`} options={options} value={value} onSelect={(v: string) => actions.assignTask(t.id, v)} />
+  return (
+    <Box key={`${keyBase}-${t.id}`} flexDirection="row" gap="md">
+      <Select key={`${keyBase}-ag-${t.id}`} options={agentOpts} value={engine} onSelect={(v: string) => v !== engine && actions.assignTask(t.id, defaultModelKey(data.agents, v as Engine))} />
+      <Select key={`${keyBase}-md-${t.id}`} options={modelOpts} value={t.assignee.model} onSelect={(v: string) => actions.assignTask(t.id, `${engine}|${v}`)} />
+    </Box>
+  )
 }
 
 /** A labelled field: a small dim label over its control. */
@@ -208,7 +218,7 @@ function issuePanel(el: El, data: ViewData, plan: PmPlan, t: PmTask, actions: Vi
     'Assignment',
     colorOf(t.assignee),
     row('assign-row', [
-      field(el, 'f-model', 'Model', modelSelect(el, data, t, actions, 'as')),
+      field(el, 'f-model', 'Agent · Model', modelSelect(el, data, t, actions, 'as')),
       editable && Select && t.assignee.engine === 'claude' && types.length > 1
         ? field(
             el,
@@ -687,7 +697,12 @@ function agentsPanel(el: El, data: ViewData, actions: ViewActions) {
         const isPending = s?.engine === a.engine
         const action =
           a.engine === 'claude' ? null : !a.isInstalled ? (
-            INSTALL[a.engine] ? <Link key={`install-${a.engine}`} href={INSTALL[a.engine]!} label="Install" /> : null
+            a.engine === 'pi' ? (
+              <Box flexDirection="row" gap={1}>
+                {!isPending && <Button key="install-pi" variant="primary" onPress={() => actions.install('pi')}>Install</Button>}
+                <Link key="install-pi-docs" href={INSTALL.pi!} label="Docs" />
+              </Box>
+            ) : INSTALL[a.engine] ? <Link key={`install-${a.engine}`} href={INSTALL[a.engine]!} label="Install" /> : null
           ) : (
             <Box flexDirection="row" gap={1}>
               {a.auth !== 'missing' && !isTesting && (

@@ -47,7 +47,27 @@ async function detectClaude($: EngineInterface): Promise<DetectedAgent> {
   }
 }
 
-async function modelsOf($: EngineInterface, engine: Engine): Promise<{ models: string[]; note?: string }> {
+// API-key variables pi reads, one per provider (docs/providers.md).
+const PI_KEY_ENV = [
+  'ANTHROPIC_API_KEY', 'ANT_LING_API_KEY', 'OPENAI_API_KEY', 'DEEPSEEK_API_KEY', 'NVIDIA_API_KEY', 'GEMINI_API_KEY',
+  'COPILOT_GITHUB_TOKEN', 'MISTRAL_API_KEY', 'GROQ_API_KEY', 'CEREBRAS_API_KEY', 'XAI_API_KEY', 'OPENROUTER_API_KEY',
+  'AI_GATEWAY_API_KEY', 'ZAI_API_KEY', 'ZAI_CODING_CN_API_KEY', 'OPENCODE_API_KEY', 'RADIUS_API_KEY', 'HF_TOKEN',
+  'FIREWORKS_API_KEY', 'TOGETHER_API_KEY', 'BASETEN_API_KEY', 'KIMI_API_KEY', 'META_API_KEY', 'MINIMAX_API_KEY',
+  'MINIMAX_CN_API_KEY', 'MOONSHOT_API_KEY', 'QWEN_TOKEN_PLAN_API_KEY', 'QWEN_TOKEN_PLAN_CN_API_KEY', 'XIAOMI_API_KEY',
+  'XIAOMI_TOKEN_PLAN_CN_API_KEY', 'XIAOMI_TOKEN_PLAN_AMS_API_KEY', 'XIAOMI_TOKEN_PLAN_SGP_API_KEY',
+]
+
+/** `provider/model` ids from the table `pi --list-models` prints (header: provider  model  context …). */
+export function parsePiModels(out: string): string[] {
+  return out
+    .split('\n')
+    .map(l => l.trim().split(/\s+/))
+    // a model row has a numeric context column; the header and "No models available" do not
+    .filter(([p, m, ctx]) => p && m && /^[\w.-]+$/.test(p) && /^\d/.test(ctx ?? ''))
+    .map(([p, m]) => `${p}/${m}`)
+}
+
+async function modelsOf($: EngineInterface, engine: Engine): Promise<{ models: string[]; needsAuth?: string[]; note?: string }> {
   if (engine === 'codex') {
     const r = await run($, ['codex', 'debug', 'models'])
     try {
@@ -59,8 +79,30 @@ async function modelsOf($: EngineInterface, engine: Engine): Promise<{ models: s
   }
   if (engine === 'opencode') {
     const r = await run($, ['opencode', 'models'], 60000)
-    const models = (r?.stdout ?? '').split('\n').map(l => l.trim()).filter(l => /^[\w.-]+\/\S+$/.test(l))
-    return { models, note: models.length ? undefined : 'No models listed (opencode auth?).' }
+    const re = /^[\w.-]+\/\S+$/
+    const connected = (r?.stdout ?? '').split('\n').map(l => l.trim()).filter(l => re.test(l))
+    // `opencode models` lists only connected providers; the models.dev catalog (what OpenCode itself uses) has all of them.
+    const c = await run($, ['sh', '-c', "curl -fsS -m 25 https://models.dev/api.json | jq -r 'to_entries[] | .key as $p | .value.models | keys[] | $p + \"/\" + .'"], 60000)
+    const catalog = (c?.exitCode === 0 ? c.stdout : '').split('\n').map(l => l.trim()).filter(l => re.test(l))
+    const have = new Set(connected)
+    const rest = [...new Set(catalog)].filter(m => !have.has(m)).sort()
+    const models = [...connected, ...rest]
+    const note = !models.length
+      ? 'No models listed (opencode auth?).'
+      : catalog.length ? undefined : 'Only connected providers shown (could not load the full catalog).'
+    return { models, needsAuth: rest, note }
+  }
+  if (engine === 'pi') {
+    // `pi --list-models` lists only providers with credentials; placeholder keys (for this listing only) reveal the whole catalog.
+    const ready = parsePiModels((await run($, ['pi', '--list-models'], 60000))?.stdout ?? '')
+    const all = parsePiModels((await run($, ['env', ...PI_KEY_ENV.map(k => `${k}=pm-mode-catalog`), 'PI_OFFLINE=1', 'pi', '--list-models'], 60000))?.stdout ?? '')
+    const have = new Set(ready)
+    const rest = [...new Set(all)].filter(m => !have.has(m))
+    const models = [...ready, ...rest]
+    const note = !models.length
+      ? 'No models listed (pi --list-models).'
+      : ready.length ? undefined : 'No provider signed in yet: connect one (pi auth login <provider>) or set its API key.'
+    return { models, needsAuth: rest, note }
   }
   if (engine === 'grok') {
     const r = await run($, ['grok', 'models'])
@@ -82,6 +124,8 @@ const SIGNIN: Record<Engine, DetectedAgent['signin']> = {
   grok: { browser: true },
   antigravity: { browser: true, apiKey: 'Gemini API key' },
   opencode: { browser: true, provider: 'Provider to connect' },
+  // `pi auth login` needs a real terminal, so the pane only names the command.
+  pi: { browser: false, provider: 'Provider to sign in' },
 }
 
 /** Whether an agent CLI holds credentials, read from its own status commands and files. */
@@ -96,6 +140,15 @@ async function authOf($: EngineInterface, engine: Engine): Promise<{ auth: AuthS
     const r = await run($, ['grok', 'models'])
     if (!r) return { auth: 'unknown' }
     return /not authenticated/i.test(`${r.stdout}${r.stderr}`) ? { auth: 'missing' } : { auth: 'unverified' }
+  }
+  if (engine === 'pi') {
+    // Providers with credentials (auth.json or env) are the ones `pi --list-models` shows.
+    const r = await run($, ['pi', '--list-models'], 60000)
+    if (!r) return { auth: 'unknown' }
+    const providers = [...new Set(parsePiModels(r.stdout).map(m => m.split('/')[0]!))]
+    return providers.length
+      ? { auth: 'unverified', authNote: `Signed in: ${providers.join(', ')}.` }
+      : { auth: 'missing', authNote: 'Connect a provider (e.g. anthropic, openai, openrouter) or set its API key.' }
   }
   if (engine === 'opencode') {
     const r = await run($, ['opencode', 'auth', 'list'])
@@ -159,6 +212,14 @@ export function signinArgv(engine: Engine): string[] | undefined {
   return undefined
 }
 
+/** One-step install for agents that ship through a package manager (mise when present, else npm). */
+export function installArgv(engine: Engine): string[] | undefined {
+  if (engine === 'pi') {
+    return ['sh', '-c', 'if command -v mise >/dev/null 2>&1; then mise use -g pi; else npm install -g @earendil-works/pi-coding-agent; fi']
+  }
+  return undefined
+}
+
 /** Picks the opencode sign-in method for a provider: device, then browser, then key. */
 export async function opencodeMethod($: EngineInterface, provider: string): Promise<{ method?: string; methods: string[]; error?: string }> {
   const r = await run($, ['opencode', 'auth', 'login', provider, '--method', '__pm_mode_list__'])
@@ -171,14 +232,14 @@ export async function opencodeMethod($: EngineInterface, provider: string): Prom
 }
 
 export async function detectAgents($: EngineInterface): Promise<DetectedAgent[]> {
-  const external: Engine[] = ['codex', 'antigravity', 'opencode', 'grok']
+  const external: Engine[] = ['codex', 'antigravity', 'opencode', 'grok', 'pi']
   const found = await Promise.all(
     external.map(async (engine): Promise<DetectedAgent> => {
       const path = await which($, BIN[engine] ?? engine)
       if (!path) {
         return { engine, label: ENGINE_LABEL[engine], isInstalled: false, models: [], agentTypes: [], auth: 'unknown', signin: SIGNIN[engine] }
       }
-      const [{ models, note }, { auth, authNote }] = await Promise.all([modelsOf($, engine), authOf($, engine)])
+      const [{ models, needsAuth, note }, { auth, authNote }] = await Promise.all([modelsOf($, engine), authOf($, engine)])
       return {
         auth,
         authNote,
@@ -189,6 +250,7 @@ export async function detectAgents($: EngineInterface): Promise<DetectedAgent[]>
         path,
         models: ['default', ...models.filter(m => m !== 'default')],
         agentTypes: [],
+        needsAuth,
         note,
       }
     }),
@@ -211,6 +273,9 @@ export function argvFor(a: Assignee, prompt: string, autonomy: Autonomy): string
         ...(model ? ['-m', model] : []), prompt]
     case 'opencode':
       return ['opencode', 'run', ...(full ? ['--auto'] : []), ...(model ? ['-m', model] : []), prompt]
+    case 'pi':
+      // pi never asks before a tool call; edit autonomy takes away its bash tool.
+      return ['pi', '-p', '--no-session', ...(full ? [] : ['--exclude-tools', 'bash']), ...(model ? ['--model', model] : []), prompt]
     case 'grok':
       return ['grok', ...(full ? ['--always-approve'] : []), ...(model ? ['-m', model] : []), '-p', prompt]
     default:
