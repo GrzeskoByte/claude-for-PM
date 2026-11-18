@@ -182,14 +182,29 @@ export function failureReason(output: string): string {
     .split('\n')
     .map(l => l.trim())
     // stack frames say where it broke, not why
-    .filter(l => l && !/^at\s/.test(l))
-  const line = lines.find(l => ACCOUNT_FAILURE.test(l)) ?? lines[lines.length - 1] ?? 'It exited without saying why.'
+    .filter(l => l && !/^at\s/.test(l) && !/^Node\.js v\d/.test(l) && !/^\^+$/.test(l) && !/^file:\/\//.test(l) && !/^\[mcp-bridge\]/.test(l))
+  const line =
+    lines.find(l => ACCOUNT_FAILURE.test(l)) ??
+    lines.find(l => /^(\w*Error|Error):/.test(l)) ??
+    lines[lines.length - 1] ??
+    'It exited without saying why.'
   return line.length > 180 ? `${line.slice(0, 177)}…` : line
 }
 
+/** OpenCode's own default is a paid Zen model. With no model chosen, prefer a local one, then a free one, then any non-Zen provider. */
+export async function opencodeDefaultModel($: EngineInterface): Promise<string | undefined> {
+  const r = await run($, ['opencode', 'models'], 60000)
+  const ms = (r?.stdout ?? '').split('\n').map(l => l.trim()).filter(l => /^[\w.-]+\/\S+$/.test(l))
+  return (
+    ms.find(m => /^(local|ollama|lmstudio|llamacpp)\//i.test(m)) ??
+    ms.find(m => /free/i.test(m)) ??
+    ms.find(m => !m.startsWith('opencode/'))
+  )
+}
+
 /** The command that runs a one-line test prompt through an agent's CLI. */
-export function testArgv(engine: Engine): string[] {
-  return argvFor({ engine, model: 'default' }, 'Reply with exactly the word OK and nothing else.', 'edit')
+export function testArgv(engine: Engine, model = 'default'): string[] {
+  return argvFor({ engine, model }, 'Reply with exactly the word OK and nothing else.', 'edit')
 }
 
 /** Lays what is known from real runs over what the credentials suggest. */

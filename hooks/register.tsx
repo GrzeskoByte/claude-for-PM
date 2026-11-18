@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { AgentHealth, Assignee, Autonomy, DetectedAgent, Engine, GroupBy, PmPlan, PmSprint, PmTab, PmTask, SigninState, SprintEdit, TaskStatus } from '../types'
-import { ACCOUNT_FAILURE, applyHealth, argvFor, detectAgents, failureReason, installArgv, opencodeMethod, signinArgv, testArgv } from './agents'
+import { opencodeDefaultModel, ACCOUNT_FAILURE, applyHealth, argvFor, detectAgents, failureReason, installArgv, opencodeMethod, signinArgv, testArgv } from './agents'
 import { CLAUDE_MODELS, DEFAULT_ASSIGNEE, ENGINES, assigneeLabel, parseAssigneeKey, schedule, taskPrompt } from './plan'
 import { PmView, TaskDialog } from './view'
 import type { ViewActions } from './view'
@@ -227,7 +227,9 @@ async function startClaude($: EngineInterface, p: PmPlan, t: PmTask) {
 
 async function startExternal($: EngineInterface, p: PmPlan, t: PmTask) {
   const autonomy = await read($, autonomyAtom)
-  const argv = argvFor(t.assignee, taskPrompt(p, t), autonomy)
+  const noModel = !t.assignee.model || t.assignee.model === 'default'
+  const assignee = t.assignee.engine === 'opencode' && noModel ? { ...t.assignee, model: (await opencodeDefaultModel($)) ?? 'default' } : t.assignee
+  const argv = argvFor(assignee, taskPrompt(p, t), autonomy)
   let out = ''
   let code: number | null = null
   try {
@@ -345,7 +347,7 @@ async function testAgent($: EngineInterface, engine: Engine) {
   await update($, testingAtom, t => [...new Set([...t, engine])])
   let health: AgentHealth
   try {
-    const r = await $.process.run(testArgv(engine), { timeoutMs: 120000, stdin: '' })
+    const r = await $.process.run(testArgv(engine, engine === 'opencode' ? ((await opencodeDefaultModel($)) ?? 'default') : 'default'), { timeoutMs: 120000, stdin: '' })
     health =
       r.exitCode === 0 && /\bOK\b/.test(r.stdout)
         ? { ok: true, at: Date.now() }
