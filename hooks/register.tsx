@@ -6,6 +6,7 @@ import { opencodeDefaultModel, ACCOUNT_FAILURE, applyHealth, argvFor, detectAgen
 import { CLAUDE_MODELS, DEFAULT_ASSIGNEE, ENGINES, assigneeLabel, parseAssigneeKey, schedule, taskPrompt } from './plan'
 import { PmView, TaskDialog } from './view'
 import type { ViewActions } from './view'
+import { buildDashboard } from './dashboard'
 
 export const PANE = 'pm-mode'
 export const TITLE = 'Claude mode for PM'
@@ -310,6 +311,13 @@ async function endRun($: EngineInterface, p: PmPlan) {
     .map(t => `### #${t.id} ${t.title} — ${assigneeLabel(t.assignee)} — ${t.status}\n${(t.output ?? '(no report)').slice(-3000)}`)
     .join('\n\n')
   $.ui.toast(`PM run finished: ${done}/${p.tasks.length} tasks done`)
+  if (p.tasks.length > 0 && done === p.tasks.length) {
+    const dash = buildDashboard({ current: p, history: await readHistory($), now: Date.now() })
+    await $.prompt.submit({
+      text: `[Claude mode for PM] The run for "${p.goal}" ended: all ${done} tasks done.\n\n${reports}\n\n## Dashboard data\n\nMarkdown report (includes a fenced text Gantt per run):\n${dash.markdown}\n\nGantt widget fragment (style and svg, no wrappers):\n\`\`\`html\n${dash.widget}\n\`\`\`\n\nAs the orchestrator: review these results against the plan and check the work. If you call ${PLAN_TOOL} for a follow-up sprint, do that and skip the dashboard. If no follow-up sprint is planned: if the show_widget tool is available, call it with the widget fragment above as given; otherwise skip the widget and show the fenced text Gantt from the markdown report. Then give me the final report from the markdown above.`,
+    })
+    return
+  }
   await $.prompt.submit({
     text: `[Claude mode for PM] The run for "${p.goal}" ended: ${done} of ${p.tasks.length} tasks done.\n\n${reports}\n\nAs the orchestrator: review these results against the plan, check the work, and fix or re-plan what failed (call ${PLAN_TOOL} for a follow-up sprint if needed). Then give me a short report.`,
   })
