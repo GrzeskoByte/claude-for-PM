@@ -4,6 +4,7 @@ import type { On } from 'claude-code'
 import type { Engine as TestEngine } from 'claude-code/testing'
 import type { PmPlan } from '../types'
 import { DEFAULT_ASSIGNEE, agentOptions, defaultModelKey, modelOptions } from '../hooks/plan.js'
+import { buildDashboard, orderedRuns } from '../hooks/dashboard.js'
 
 const PANE = {
   plugin: 'pm-mode',
@@ -461,4 +462,73 @@ test('pm_status answers a subagent call', async ($, on) => {
   await $.tool.call({ tool: 'mcp__pm-mode__pm_plan', ...PLAN })
   const r = await $.tool.call({ tool: 'mcp__pm-mode__pm_status', agentId: 'agent-1' })
   expect(String(r.result)).toContain('Add CSV export')
+})
+
+const CODEX_PLAN = {
+  goal: 'Index the report code',
+  sprints: [{ n: 1, name: 'Sprint 1' }],
+  tasks: [
+    { id: 'T1', title: 'Find report code', definition: 'Locate files', sprint: 1, estimateMin: 5, engine: 'codex', model: 'gpt-6.1-sol' },
+    { id: 'T2', title: 'List report routes', definition: 'List routes', sprint: 1, estimateMin: 5, engine: 'codex', model: 'gpt-6.1-sol' },
+  ],
+}
+
+test('an all-done run submits the dashboard and a render instruction', async ($, on) => {
+  const { submitted, clock } = world(on)
+  await $.session.start({ cwd: '/work', surface: 'desktop', isInteractive: true })
+  await $.tool.call({ tool: 'mcp__pm-mode__pm_plan', ...CODEX_PLAN })
+  expect((await $.command.run({ ...PM_COMMAND, args: 'start' })).text).toBe('Started the run.')
+  await clock.advance(1)
+  expect(submitted.length).toBe(1)
+  const text = submitted[0]!
+  expect(text).toContain('all 2 tasks done')
+  expect(text).toContain('## Dashboard data')
+  expect(text).toContain('Markdown report (includes a fenced text Gantt per run)')
+  expect(text).toContain('Gantt widget fragment')
+  expect(text).toContain('```html')
+  expect(text).toContain('<svg')
+  expect(text).not.toContain('<!doctype')
+  expect(text).not.toContain('<html')
+  expect(text).not.toContain('<body')
+  expect(text).not.toContain('<head')
+  expect(text).toContain('show_widget')
+  expect(text).toContain('if the show_widget tool is available')
+  expect(text).toContain('fenced text Gantt')
+  expect(text).toContain('skip the dashboard')
+})
+
+test('a partly failed run submits the plain report without the dashboard', async ($, on) => {
+  const partial = {
+    ...CODEX_PLAN,
+    tasks: [
+      CODEX_PLAN.tasks[0]!,
+      { id: 'T2', title: 'Run on Claude', definition: 'Needs a subagent', sprint: 1, estimateMin: 5, engine: 'claude', model: 'claude-sonnet-5-5' },
+    ],
+  }
+  const { submitted, clock } = world(on)
+  await $.session.start({ cwd: '/work', surface: 'desktop', isInteractive: true })
+  await $.tool.call({ tool: 'mcp__pm-mode__pm_plan', ...partial })
+  expect((await $.command.run({ ...PM_COMMAND, args: 'start' })).text).toBe('Started the run.')
+  await clock.advance(1)
+  expect(submitted.length).toBe(1)
+  const text = submitted[0]!
+  expect(text).toContain('1 of 2 tasks done')
+  expect(text).toContain('give me a short report')
+  expect(text).not.toContain('## Dashboard data')
+  expect(text).not.toContain('show_widget')
+  expect(text).not.toContain('<svg')
+})
+
+test('dashboard keeps only the last five runs and emits a bare fragment', () => {
+  const runPlan = (createdAt: number): PmPlan => ({ ...savedPlan('done'), goal: `Run ${createdAt}`, createdAt, startedAt: createdAt + 1000 })
+  const history = Array.from({ length: 8 }, (_, i) => runPlan(i + 1))
+  const current = runPlan(9)
+  expect(orderedRuns({ current, history: [...history, current] }).map(p => p.createdAt)).toEqual([5, 6, 7, 8, 9])
+  const dash = buildDashboard({ current, history, now: 10_000 })
+  expect(dash.widget.startsWith('<style>')).toBe(true)
+  expect(dash.widget.match(/<svg/g)?.length).toBe(1)
+  for (const tag of ['<!doctype', '<html', '<head', '<body']) expect(dash.widget.toLowerCase()).not.toContain(tag)
+  expect(dash.markdown.match(/^## /gm)?.length).toBe(5)
+  expect(dash.markdown).toContain('Run 9')
+  expect(dash.markdown).not.toContain('Run 4')
 })
